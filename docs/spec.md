@@ -257,6 +257,7 @@ client-ontologies/
     evidence.schema.json
     rule.schema.json
     client.schema.json
+    manifest.schema.json
     module.schema.json
     projection.schema.json
   templates/
@@ -329,7 +330,7 @@ Spec, architectural decision records, contribution rules, and human-readable des
 
 Machine-readable JSON Schemas for validating ontology files. These schemas are generic and client-independent.
 
-The contract is split by resource `kind`: `client.schema.json`, `module.schema.json`, and `projection.schema.json` dispatch off shared `$defs` in `defs.schema.json` (id/status/confidence), `evidence.schema.json` (sources and evidence references), and `rule.schema.json`. `ontology.schema.json` is the umbrella that `oneOf`-dispatches by kind. `scripts/validate_ontology.py` enforces the matching schema for each file (types, controlled-vocabulary enums, required identity fields, and `additionalProperties: false` — extensions must be `x_`-prefixed) *before* its repo-specific cross-reference and evidence checks. The validator ships a small dependency-free JSON Schema (draft 2020-12 subset) evaluator so the repo keeps no Python package requirements; negative fixtures in `tests/fixtures/` (run via `tests/run_fixtures.py`) prove malformed files are rejected.
+The contract is split by resource `kind`: `client.schema.json`, `manifest.schema.json` (the `kind: ontology` per-client manifest), `module.schema.json`, and `projection.schema.json` dispatch off shared `$defs` in `defs.schema.json` (id/status/confidence), `evidence.schema.json` (sources and evidence references), and `rule.schema.json`. `ontology.schema.json` is the umbrella that `oneOf`-dispatches by kind. `scripts/validate_ontology.py` enforces the matching schema for each file (types, controlled-vocabulary enums, required identity fields, and `additionalProperties: false` — extensions must be `x_`-prefixed) *before* its repo-specific cross-reference and evidence checks. The validator ships a small dependency-free JSON Schema (draft 2020-12 subset) evaluator so the repo keeps no Python package requirements; negative fixtures in `tests/fixtures/` (run via `tests/run_fixtures.py`) prove malformed files are rejected.
 
 #### `templates/`
 
