@@ -393,43 +393,46 @@ workstreams:
     status: active
 ```
 
-### 5.2 Ontology index file
+### 5.2 Ontology manifest file
 
 `clients/<client-id>/ontology.yaml`
 
-Purpose: module manifest, inheritance, projections, and exports.
+Purpose: the per-client manifest and **stable entry point**. It makes the client
+ontology navigable, pins module/projection membership, and is the first file
+agents and scripts should load before reading individual modules.
+
+> Implementation note: the live repo uses `kind: ontology` with lowercase
+> client-namespaced IDs. The earlier `kind: ontology_index` / `extends` /
+> dotted-`jmd.*`-ID sketch below was design rationale and is **not** what the
+> validator enforces — the shape shown here is canonical.
 
 ```yaml
 schema_version: "0.1"
-kind: ontology_index
+kind: ontology
+id: jmd-menswear.ontology
 client_id: jmd-menswear
-
-extends:
-  - formalwear-retail-showroom
-  - cms-website
-  - local-visibility
-  - inventory-image-automation
-
+status: active
 modules:
-  - path: modules/website-showroom.yaml
-    id: jmd.website_showroom
+  - path: modules/website.yaml
+    id: jmd-menswear.website
   - path: modules/inventory-images.yaml
-    id: jmd.inventory_images
-  - path: modules/local-visibility.yaml
-    id: jmd.local_visibility
-  - path: modules/approvals.yaml
-    id: jmd.approvals
-
+    id: jmd-menswear.inventory-images
 projections:
-  - path: projections/website-repo.yaml
-    target: github_repo
-    target_ref: sabnanikl-dev/jmd-6-holding-page-harness
-  - path: projections/inventory-automation.yaml
-    target: automation_workflow
-    target_ref: jmd-drive-to-sanity
-  - path: projections/handoff.yaml
-    target: client_handoff
+  - path: projections/website-build.yaml
+    id: jmd-menswear.website-build
+  - path: projections/inventory-workflow.yaml
+    id: jmd-menswear.inventory-workflow
+handoff_outputs:        # optional: projections intended for client/agent handoff
+  - id: jmd-menswear.agent-context
+    target: generic_agent
+notes: >                # optional free-text orientation
+  Manifest and stable entry point for the JMD Menswear ontology.
 ```
+
+The validator (`scripts/validate_ontology.py`) loads manifests first and checks
+that every listed `path` exists, that each declared `id` matches the ID inside
+the referenced file, and that no module/projection file is left unregistered.
+`templates` is a reserved optional field for future shared-template references.
 
 ### 5.3 Module file
 
