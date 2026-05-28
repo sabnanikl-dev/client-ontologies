@@ -1,0 +1,16 @@
+# Invalid fixture: `includes` is a scalar, not a mapping.
+# The schema layer must report a type error AND the cross-reference pass must not
+# crash (regression test: previously raised AttributeError on includes.get(...)).
+schema_version: "0.1"
+kind: projection
+id: demo.website.public
+client_id: demo
+status: active
+projection_target:
+  type: sqlite
+includes: not-a-map
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."

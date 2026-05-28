@@ -25,6 +25,7 @@ CASES = [
     ("bad-enum", "not one of"),
     ("unknown-kind", "unknown or missing kind"),
     ("unknown-field", "unknown field not permitted"),
+    ("malformed-includes", "expected type object"),
 ]
 
 

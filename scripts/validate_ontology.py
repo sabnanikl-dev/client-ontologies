@@ -344,7 +344,9 @@ def validate(root: Path) -> list[str]:
                 if rule.get("source_confidence") == "verified" and not rule.get("evidence"):
                     errors.append(f"{path}: verified rule lacks evidence: {rule.get('id')}")
         elif kind == "projection":
-            includes = data.get("includes") or {}
+            includes = data.get("includes")
+            if not isinstance(includes, dict):
+                includes = {}
             for mod_id in includes.get("modules", []) or []:
                 if mod_id not in module_ids:
                     errors.append(f"{path}: projection references unknown module: {mod_id}")
