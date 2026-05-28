@@ -1,0 +1,1968 @@
+# Client Operating Ontology Spec v0.1
+
+> Status: Draft specification for review.  
+> Repository: `sabnanikl-dev/client-ontologies`  
+> Scope: Agent-agnostic client ontology authoring, validation, projection, runtime consumption, and handoff.  
+> Last researched: 2026-05-28.
+
+---
+
+## 1. Purpose
+
+A **Client Operating Ontology** is a version-controlled, agent-agnostic semantic contract for doing client work.
+
+It defines:
+
+- the client workstreams currently in scope;
+- the business and work-product entities involved in those workstreams;
+- relationships between entities;
+- approved facts and claims;
+- content, safety, and approval rules;
+- source systems and systems of record;
+- repo/workflow projections;
+- handoff exports that a client or future operator can understand.
+
+It is not meant to be an academic ontology project first. It is meant to support real work such as:
+
+- building and maintaining the Femme Events website;
+- operating Femme Events local visibility/SEO artifacts;
+- building and maintaining the JMD Menswear website/showroom;
+- designing JMD Google Drive → CMS inventory-image workflows;
+- creating handoff packages for clients or future operators;
+- giving any capable agent, automation, or developer a shared source of truth that is not tied to one assistant's memory.
+
+### 1.1 Primary goal
+
+Make client work safer, more reusable, and more handoff-ready by moving client semantics out of chat memory and into reviewed files.
+
+### 1.2 Non-goals for v0
+
+The v0 ontology system does **not** aim to:
+
+- replace GitHub issues, Linear, or project trackers;
+- replace Sanity CMS or any client CMS;
+- replace CRM/POS/accounting systems;
+- become the only place where narrative client context lives;
+- start with OWL/RDF/Neo4j as the required authoring layer;
+- contain credentials, OAuth tokens, private raw exports, or secrets;
+- encode instructions for only one agent or assistant implementation.
+
+---
+
+## 2. Design principles
+
+### 2.1 Agent agnostic by default
+
+The ontology must be usable by multiple consumers:
+
+- coding agents;
+- planning agents;
+- review agents;
+- deterministic scripts;
+- CI checks;
+- human developers;
+- client-facing handoff docs;
+- future hosted Papi systems.
+
+Therefore, canonical ontology files must avoid agent-specific language such as:
+
+```yaml
+# Avoid in canonical ontology
+hermes_should: "..."
+claude_should: "..."
+codex_should: "..."
+```
+
+Use neutral consumer/action language instead:
+
+```yaml
+# Prefer
+consumer_requirements:
+  - id: public_content.requires_approval_check
+    applies_to:
+      - content_generation
+      - website_publication
+      - account_mutation
+    requirement: "Before public use, verify an approved source or approval record exists."
+```
+
+Agent-specific operational behavior may live in skills, repo `AGENTS.md` files, or runtime adapters, but not in the canonical ontology schema.
+
+### 2.2 Evidence over memory
+
+Any client-specific fact that can affect public content, account changes, automation, or handoff must cite a source.
+
+Valid evidence source types:
+
+```yaml
+evidence_source_types:
+  - obsidian_note
+  - local_project_doc
+  - git_repo_file
+  - github_issue
+  - github_pr
+  - linear_issue
+  - client_email_or_message
+  - public_url
+  - api_readonly_snapshot
+  - human_approval_record
+```
+
+Example:
+
+```yaml
+approved_claims:
+  - id: femme.identity.primary_website
+    value: "https://femmeevents.com"
+    status: approved_internal
+    evidence:
+      - type: obsidian_note
+        path: "/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Overview.md"
+        lines: "17-18,37-41"
+      - type: local_project_doc
+        path: "/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md"
+        lines: "44-56,91-101"
+```
+
+### 2.3 Authoring source and runtime stores are separate
+
+Canonical authoring source in v0:
+
+```text
+YAML / JSON / Markdown files in git
+```
+
+Runtime consumers may compile projections into:
+
+- SQLite for local lookup and validation;
+- Postgres for hosted multi-user systems;
+- Sanity for website content records;
+- Google Sheets for lightweight ledgers;
+- n8n workflows for deterministic reconciliation;
+- RDF/OWL/Turtle later if formal graph reasoning becomes necessary.
+
+Canonical ontology files remain the reviewed contract.
+
+### 2.4 Workstream-first modeling
+
+Client ontologies should be organized around work being done, not just abstract business categories.
+
+Examples:
+
+```yaml
+workstreams:
+  - id: website
+  - id: local_visibility
+  - id: cms_content
+  - id: inventory_images
+  - id: reporting
+  - id: handoff
+```
+
+For JMD, `inventory_images` matters because a planned workflow involves Google Drive intake, approval, Sanity assets, website showroom cards, and archive states.
+
+For Femme, `local_visibility` matters because there is a dedicated Femme Visibility repo and local SEO source-of-truth artifact.
+
+### 2.5 Handoff-aware from the beginning
+
+Every canonical module should be able to produce at least two views:
+
+1. **Internal operating view** — for agents, developers, and automations.
+2. **Client handoff view** — clean explanations of business objects, workflows, approval states, and maintenance responsibilities.
+
+The client handoff view must remove:
+
+- private file paths unless intentionally shared;
+- internal-only notes;
+- credentials and tokens;
+- implementation-only agent routing details;
+- unfinished assumptions not labeled as draft/unknown.
+
+---
+
+## 3. Verified source registry for this draft
+
+The following sources were inspected for this spec. These are references for the spec itself, not a replacement for per-fact evidence in future ontology modules.
+
+### 3.1 Repositories verified through GitHub
+
+- `sabnanikl-dev/client-ontologies`
+  - URL: `https://github.com/sabnanikl-dev/client-ontologies`
+  - Visibility: public
+  - State observed: empty repository / no initial commits yet
+- `sabnanikl-dev/Femme-Events-Website`
+  - URL: `https://github.com/sabnanikl-dev/Femme-Events-Website`
+  - Visibility: public
+  - Description observed: `Femme Website`
+  - Default branch: `main`
+- `sabnanikl-dev/Femme-visibility`
+  - URL: `https://github.com/sabnanikl-dev/Femme-visibility`
+  - Visibility: private
+  - Description observed: `will be used for femme visibility and reusable operations`
+  - Default branch: `main`
+- `sabnanikl-dev/jmd-6-holding-page-harness`
+  - URL: `https://github.com/sabnanikl-dev/jmd-6-holding-page-harness`
+  - Visibility: private
+  - Description observed: `JMD-6 holding page coding harness and spec`
+  - Default branch: `main`
+
+### 3.2 Obsidian/wiki sources inspected
+
+- `/Users/creator/obsidian-vault/hermes-brain/wiki/consultancy/clients/JMD/Client JMD Menswear.md`
+- `/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Overview.md`
+- `/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Brand Guide.md`
+
+### 3.3 Local project documents inspected
+
+- `/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/docs/research/inventory-backend-automation-plan.md`
+- `/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md`
+- `/Users/creator/projects/Femme-Events-Website/README.md`
+- `/Users/creator/projects/Femme-Events-Website/AGENTS.md`
+- `/Users/creator/projects/femme-events/visibility/Femme-visibility/AGENTS.md`
+- `/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/AGENTS.md`
+
+### 3.4 Linear issues inspected via GraphQL search
+
+Relevant issues observed:
+
+- `PAPI-68` — Create Femme Events client operating ontology v0
+- `PAPI-69` — Create ontology-management skill for client operating ontologies
+- `PAPI-70` — Audit Femme ontology source material and workstreams
+- `PAPI-71` — Author canonical Femme ontology YAML modules
+- `PAPI-72` — Create Femme website and visibility ontology projections
+- `JMD-30` — Create JMD Menswear client operating ontology v0
+- `JMD-23` — Build deterministic Google Drive to Sanity photo automation for JMD showroom images
+- `PAPI-44` — Task 0.3 — Create local SEO source of truth and claims guardrails
+- `PAPI-56` — Review and approve Femme local SEO source of truth
+- `JMD-20` — Verify JMD business data for landing page
+
+The current spec does not mutate Linear; it only records observed planning/history context.
+
+---
+
+## 4. Repository layout
+
+Recommended repository layout:
+
+```text
+client-ontologies/
+  README.md
+  docs/
+    spec.md
+    decisions/
+      ADR-0001-authoring-format.md
+  schemas/
+    client-ontology.schema.json
+    module.schema.json
+    projection.schema.json
+    rule.schema.json
+    evidence.schema.json
+  templates/
+    cms-website/
+      module.yaml
+      handoff.md
+    local-visibility/
+      module.yaml
+      handoff.md
+    inventory-image-automation/
+      module.yaml
+      handoff.md
+    wedding-event-services/
+      module.yaml
+    formalwear-retail-showroom/
+      module.yaml
+  clients/
+    femme-events/
+      client.yaml
+      ontology.yaml
+      modules/
+        website.yaml
+        cms.yaml
+        brand-content.yaml
+        local-visibility.yaml
+        inquiry-ops.yaml
+        approvals.yaml
+      projections/
+        website-repo.yaml
+        visibility-repo.yaml
+        handoff.yaml
+      handoff/
+        glossary.md
+        website-maintenance.md
+        local-visibility-maintenance.md
+        cms-data-dictionary.md
+    jmd-menswear/
+      client.yaml
+      ontology.yaml
+      modules/
+        website-showroom.yaml
+        inventory-images.yaml
+        local-visibility.yaml
+        approvals.yaml
+        reporting.yaml
+        content-engine.yaml
+      projections/
+        website-repo.yaml
+        inventory-automation.yaml
+        handoff.yaml
+      handoff/
+        glossary.md
+        inventory-workflow.md
+        website-maintenance.md
+        cms-data-dictionary.md
+  tools/
+    validate_ontology.py
+    generate_projection.py
+    generate_handoff.py
+    export_sqlite.py
+```
+
+### 4.1 What belongs where
+
+#### `docs/`
+
+Spec, architectural decision records, contribution rules, and human-readable design notes.
+
+#### `schemas/`
+
+Machine-readable JSON Schemas for validating ontology files. These schemas should be generic and client-independent.
+
+#### `templates/`
+
+Reusable domain/workstream templates that can be extended by clients.
+
+Examples:
+
+- `cms-website`
+- `local-visibility`
+- `inventory-image-automation`
+- `wedding-event-services`
+- `formalwear-retail-showroom`
+
+#### `clients/<client-id>/`
+
+Client-specific facts, rules, modules, and projections.
+
+#### `clients/<client-id>/handoff/`
+
+Generated or curated client-facing documents. These must be safe to share after human review.
+
+#### `tools/`
+
+Optional scripts for validation, projection generation, handoff generation, and runtime export.
+
+---
+
+## 5. Canonical ontology file model
+
+### 5.1 Client file
+
+`clients/<client-id>/client.yaml`
+
+Purpose: stable client metadata and high-level governance. It should not be overloaded with all modules.
+
+```yaml
+schema_version: "0.1"
+kind: client
+id: jmd-menswear
+name: JMD Menswear
+status: active
+client_type: local_formalwear_retail
+
+source_registry:
+  - id: jmd-wiki-client-note
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/consultancy/clients/JMD/Client JMD Menswear.md"
+    description: "JMD client profile, business model, constraints, project files, domain/DNS, GBP notes."
+
+privacy:
+  public_handoff_allowed: true
+  contains_private_context: true
+  secret_policy: "No credentials, OAuth tokens, raw private exports, or payment details."
+
+workstreams:
+  - id: website_showroom
+    status: active
+  - id: local_visibility
+    status: active
+  - id: inventory_images
+    status: planned
+  - id: content_engine
+    status: candidate
+  - id: reporting
+    status: active
+```
+
+### 5.2 Ontology index file
+
+`clients/<client-id>/ontology.yaml`
+
+Purpose: module manifest, inheritance, projections, and exports.
+
+```yaml
+schema_version: "0.1"
+kind: ontology_index
+client_id: jmd-menswear
+
+extends:
+  - formalwear-retail-showroom
+  - cms-website
+  - local-visibility
+  - inventory-image-automation
+
+modules:
+  - path: modules/website-showroom.yaml
+    id: jmd.website_showroom
+  - path: modules/inventory-images.yaml
+    id: jmd.inventory_images
+  - path: modules/local-visibility.yaml
+    id: jmd.local_visibility
+  - path: modules/approvals.yaml
+    id: jmd.approvals
+
+projections:
+  - path: projections/website-repo.yaml
+    target: github_repo
+    target_ref: sabnanikl-dev/jmd-6-holding-page-harness
+  - path: projections/inventory-automation.yaml
+    target: automation_workflow
+    target_ref: jmd-drive-to-sanity
+  - path: projections/handoff.yaml
+    target: client_handoff
+```
+
+### 5.3 Module file
+
+`clients/<client-id>/modules/<module>.yaml`
+
+Purpose: workstream-specific entities, relationships, rules, systems, and evidence.
+
+```yaml
+schema_version: "0.1"
+kind: ontology_module
+id: jmd.inventory_images
+title: "JMD Inventory Image Workflow"
+client_id: jmd-menswear
+status: draft
+workstreams:
+  - inventory_images
+  - website_showroom
+
+entities: []
+relationships: []
+rules: []
+systems: []
+state_machines: []
+evidence: []
+handoff: []
+```
+
+---
+
+## 6. Standard entity model
+
+Every entity should use a consistent shape.
+
+```yaml
+entities:
+  - id: InventoryImage
+    label: Inventory Image
+    description: "A photo used to represent a showroom item or garment category."
+    entity_type: work_product
+    public_facing: true
+    workstreams:
+      - inventory_images
+      - website_showroom
+    lifecycle_states:
+      - raw_uploaded
+      - needs_review
+      - approved
+      - scheduled
+      - published
+      - archived
+      - rejected
+      - error
+    source_systems:
+      - google_drive
+      - sanity
+    related_entities:
+      - InventoryItem
+      - SanityAsset
+      - ShowroomCard
+      - ApprovalLedgerEntry
+    approval_required: true
+    handoff_label: "Website inventory photo"
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "184-237,238-310"
+```
+
+### 6.1 Entity type vocabulary
+
+Recommended `entity_type` values:
+
+```yaml
+entity_types:
+  - business_object       # Customer, Event, Garment, ServicePackage
+  - work_product          # WebsitePage, CopyBlock, ShowroomCard
+  - content_record        # SanityDocument, StaticFallbackData
+  - media_asset           # ProductPhoto, BrandAsset, SanityAsset
+  - workflow_artifact     # ApprovalLedgerEntry, SyncRun, HandoffDoc
+  - system_resource       # DriveFolder, Repo, APIEndpoint
+  - governance_object     # ApprovedClaim, ApprovalGate, Rule
+  - metric                # CallRate, DirectionRequestRate, WebsiteClickRate
+```
+
+---
+
+## 7. Relationship model
+
+Relationships should be practical and implementation-useful.
+
+### 7.1 Relationship object shape
+
+```yaml
+relationships:
+  - id: jmd.image.creates_sanity_asset
+    subject: InventoryImage
+    predicate: creates_or_updates
+    object: SanityAsset
+    workstreams:
+      - inventory_images
+    cardinality: many_to_one
+    description: "An approved inventory image may create or update a Sanity asset for website delivery."
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "406-418"
+```
+
+### 7.2 Compact triple form
+
+For simple modules, triples are acceptable:
+
+```yaml
+triples:
+  - [InventoryImage, creates_or_updates, SanityAsset]
+  - [SanityAsset, renders_in, ShowroomCard]
+  - [ShowroomCard, appears_on, WebsitePage]
+```
+
+### 7.3 Relationship predicates
+
+Recommended generic predicates:
+
+```yaml
+predicates:
+  - contains
+  - uses
+  - creates
+  - creates_or_updates
+  - overrides
+  - merges_with
+  - renders_in
+  - appears_on
+  - requires_approval_from
+  - governed_by
+  - sourced_from
+  - stored_in
+  - synchronized_by
+  - archived_by
+  - supports
+  - targets
+  - must_match
+```
+
+---
+
+## 8. Rule model
+
+Rules are the enforcement and safety layer.
+
+### 8.1 Rule shape
+
+```yaml
+rules:
+  - id: jmd.website.no_ecommerce_language
+    title: "Do not imply ecommerce behavior"
+    status: active
+    severity: blocking
+    applies_to:
+      entity_types:
+        - WebsitePage
+        - ShowroomCard
+        - CopyBlock
+      workstreams:
+        - website_showroom
+        - inventory_images
+    rule_type: prohibited_claim
+    statement: "Public JMD website content must not imply checkout, cart, live stock counts, or guaranteed inventory availability unless the operating model is explicitly approved later."
+    machine_check:
+      type: disallowed_terms
+      disallowed_terms:
+        - "add to cart"
+        - "buy online"
+        - "only 1 left"
+        - "in stock"
+        - "available now"
+    evidence:
+      - source_id: jmd-client-note
+        lines: "51-54"
+      - source_id: jmd-inventory-plan
+        lines: "22-27,233-237"
+```
+
+### 8.2 Rule status vocabulary
+
+```yaml
+rule_status:
+  draft: "Proposed by an operator/agent; not safe as public constraint yet."
+  proposed: "Ready for human/domain review."
+  active: "Approved or otherwise verified enough to govern work."
+  deprecated: "No longer active; retained for history."
+  prohibited: "Explicitly disallowed."
+```
+
+### 8.3 Rule severity vocabulary
+
+```yaml
+rule_severity:
+  info: "Context only."
+  warning: "Should be reviewed if violated."
+  blocking: "Work should not proceed until resolved."
+  approval_required: "Work may proceed as a draft but cannot be public/live without approval."
+```
+
+### 8.4 Machine-checkable rules
+
+Rules should include machine checks when feasible.
+
+```yaml
+machine_check_types:
+  - disallowed_terms
+  - required_terms
+  - required_fields
+  - prohibited_fields
+  - status_transition
+  - url_canonicalization
+  - schema_match
+  - evidence_required
+  - approval_required
+```
+
+Example:
+
+```yaml
+rules:
+  - id: femme.cms.sparse_records_merge_with_fallback
+    title: "Sparse CMS records must merge with fallback data"
+    status: active
+    severity: blocking
+    applies_to:
+      systems:
+        - sanity
+        - website_repo
+      entities:
+        - SanityDocument
+        - StaticFallbackData
+    rule_type: implementation_constraint
+    statement: "If the CMS returns only a subset of records, website code must merge CMS records into static fallback data rather than replacing the whole fallback dataset."
+    machine_check:
+      type: required_behavior
+      test_hint: "Find fetch/merge functions and verify fallback records remain visible when CMS returns one item."
+    evidence:
+      - source_id: femme-design-skill-derived-context
+        note: "Existing skill context documents sparse CMS rule; future module must cite repo implementation or issue/PR once added."
+```
+
+---
+
+## 9. Evidence model
+
+Evidence prevents ontology drift and hallucinated public claims.
+
+### 9.1 Evidence source registry
+
+Each module should define source IDs once.
+
+```yaml
+evidence_sources:
+  - id: jmd-client-note
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/consultancy/clients/JMD/Client JMD Menswear.md"
+    description: "Client profile and constraints."
+
+  - id: jmd-inventory-plan
+    type: local_project_doc
+    path: "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/docs/research/inventory-backend-automation-plan.md"
+    description: "Draft JMD inventory backend and Drive automation plan."
+
+  - id: linear-jmd-23
+    type: linear_issue
+    identifier: JMD-23
+    url: "https://linear.app/papi-consultants/issue/JMD-23/build-deterministic-google-drive-to-sanity-photo-automation-for-jmd"
+    description: "Observed planning issue for Drive to Sanity photo automation."
+```
+
+### 9.2 Evidence on claims
+
+```yaml
+claims:
+  - id: femme.identity.canonical_phone
+    value: "(678) 644-5257"
+    status: owner_reviewed_internal
+    public_safe: true
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "44-56"
+```
+
+### 9.3 Required evidence rules
+
+Any of the following must have evidence before becoming `active`:
+
+- public phone/email/address/URL;
+- service/package name;
+- pricing or starting price;
+- location/service-area claim;
+- owner/team role;
+- customer-facing policy;
+- public website copy rule;
+- account mutation rule;
+- workflow state that can publish/archive/delete;
+- client handoff instruction.
+
+---
+
+## 10. Approval model
+
+Approvals must be modeled separately from facts.
+
+### 10.1 Approval gate shape
+
+```yaml
+approval_gates:
+  - id: jmd.public_content.client_approval_required
+    title: "JMD public content requires client approval"
+    applies_to:
+      - WebsitePage
+      - ShowroomCard
+      - GBPUpdate
+      - SocialPost
+    approver_roles:
+      - client_owner
+      - account_owner
+    draft_allowed_without_approval: true
+    public_or_live_allowed_without_approval: false
+    evidence_required: true
+```
+
+### 10.2 Approval record shape
+
+```yaml
+approval_records:
+  - id: approval.jmd.rentals.copy.2026-05-12
+    source_type: client_email_or_message
+    approved_by:
+      - role: client_owner
+        name: "Lucky/Danny"
+    approved_at: "2026-05-12"
+    scope:
+      - "Tuxedo rental copy"
+      - "Starting price wording"
+      - "Wedding group timing wording"
+    approved_values:
+      tuxedo_rental_starting_price: "$209.99 and up"
+      wedding_groups: "prefer appointments"
+      wedding_group_timing: "minimum of 3–4 weeks"
+    source_reference: "Future module must cite the original email/message or verified local ingestion doc."
+```
+
+### 10.3 Draft vs public mutations
+
+Ontology consumers may use draft facts for planning if labeled correctly. They must not use draft facts for public/live changes.
+
+```yaml
+public_use_policy:
+  draft: false
+  proposed: false
+  owner_reviewed_internal: true
+  active: true
+  approved: true
+  unknown: false
+  prohibited: false
+```
+
+---
+
+## 11. Projection model
+
+A projection is a repo-, workflow-, or handoff-specific slice of the canonical ontology.
+
+### 11.1 Projection file shape
+
+```yaml
+schema_version: "0.1"
+kind: projection
+id: femme.website_repo_projection
+client_id: femme-events
+projection_target:
+  type: github_repo
+  repo: sabnanikl-dev/Femme-Events-Website
+  local_paths:
+    - "/Users/creator/projects/Femme-Events-Website"
+    - "/Users/creator/projects/femme-events/website/Femme Events Website Build/Femme-Events-Website"
+
+includes:
+  modules:
+    - femme.website
+    - femme.cms
+    - femme.brand_content
+    - femme.approvals
+  entities:
+    - WebsitePage
+    - ServicePackage
+    - CopyBlock
+    - SanityDocument
+    - StaticFallbackData
+    - CTA
+  rules:
+    - femme.copy.public_claims_require_approval
+    - femme.cms.sparse_records_merge_with_fallback
+
+outputs:
+  - path: "docs/ontology/website-projection.yaml"
+    format: yaml
+  - path: "docs/ontology/content-rules.md"
+    format: markdown
+```
+
+### 11.2 Projection destinations
+
+Supported `projection_target.type` values:
+
+```yaml
+projection_target_types:
+  - github_repo
+  - local_repo
+  - automation_workflow
+  - cms_schema
+  - handoff_package
+  - sqlite_export
+  - postgres_migration
+  - skill_reference
+```
+
+### 11.3 Projection rules
+
+- A projection must identify its source ontology commit or version.
+- A projection must be smaller than the canonical ontology.
+- A projection should include only the rules/entities needed by that repo/workflow/handoff.
+- A projection should not include private internal notes unless the target is explicitly internal.
+- Generated projections should be committed in the target repo only when they materially help future work.
+
+---
+
+## 12. Runtime storage guidance
+
+### 12.1 Recommended v0 decision
+
+Use version-controlled YAML/JSON/Markdown as the canonical source.
+
+Do not start with a database as the authoring surface.
+
+### 12.2 SQLite runtime export
+
+Use SQLite for local agent/script lookup when:
+
+- the ontology needs fast local queries;
+- deterministic checks need to run without loading many files;
+- a workflow needs a portable single-file artifact;
+- no multi-user hosted app is needed.
+
+Example schema:
+
+```sql
+CREATE TABLE ontology_entities (
+  client_id TEXT NOT NULL,
+  module_id TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  public_facing INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL,
+  PRIMARY KEY (client_id, module_id, entity_id)
+);
+
+CREATE TABLE ontology_relationships (
+  client_id TEXT NOT NULL,
+  module_id TEXT NOT NULL,
+  relationship_id TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  object TEXT NOT NULL,
+  raw_json TEXT NOT NULL,
+  PRIMARY KEY (client_id, module_id, relationship_id)
+);
+
+CREATE TABLE ontology_rules (
+  client_id TEXT NOT NULL,
+  module_id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  rule_type TEXT NOT NULL,
+  statement TEXT NOT NULL,
+  raw_json TEXT NOT NULL,
+  PRIMARY KEY (client_id, module_id, rule_id)
+);
+
+CREATE INDEX idx_rules_client_status ON ontology_rules(client_id, status);
+CREATE INDEX idx_entities_client_type ON ontology_entities(client_id, entity_type);
+```
+
+Example query:
+
+```sql
+SELECT rule_id, severity, statement
+FROM ontology_rules
+WHERE client_id = 'jmd-menswear'
+  AND status IN ('active', 'approved')
+  AND raw_json LIKE '%website_showroom%';
+```
+
+### 12.3 Postgres runtime storage
+
+Use Postgres when:
+
+- a hosted client portal needs ontology-backed behavior;
+- multiple users need concurrent updates;
+- approval records need robust audit trails;
+- ontology projections must join with live operational data;
+- workflow state transitions need durable locking/transactions.
+
+Example minimal tables:
+
+```sql
+CREATE TABLE client_ontology_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id TEXT NOT NULL,
+  ontology_version TEXT NOT NULL,
+  git_commit_sha TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (client_id, ontology_version)
+);
+
+CREATE TABLE client_ontology_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ontology_version_id UUID NOT NULL REFERENCES client_ontology_versions(id),
+  rule_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  applies_to JSONB NOT NULL DEFAULT '{}'::jsonb,
+  machine_check JSONB,
+  raw JSONB NOT NULL,
+  UNIQUE (ontology_version_id, rule_id)
+);
+
+CREATE TABLE client_approval_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id TEXT NOT NULL,
+  approval_id TEXT NOT NULL,
+  approved_by JSONB NOT NULL,
+  approved_at TIMESTAMPTZ,
+  scope JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  raw JSONB NOT NULL,
+  UNIQUE (client_id, approval_id)
+);
+```
+
+### 12.4 Sanity CMS relationship
+
+Sanity should store website content records and media assets. It should not be the canonical ontology source in v0.
+
+Good Sanity contents:
+
+- journal posts;
+- testimonials;
+- vendor listings;
+- JMD showroom items;
+- image assets;
+- editable copy blocks if deliberately modeled.
+
+Ontology responsibilities:
+
+- define what a `ShowroomItem` means;
+- define which public fields are allowed;
+- define approval states;
+- define prohibited e-commerce claims;
+- define sparse CMS fallback behavior;
+- inform Sanity schema design.
+
+Example Sanity schema snippet informed by ontology:
+
+```ts
+import {defineField, defineType} from 'sanity'
+
+export const showroomItem = defineType({
+  name: 'showroomItem',
+  title: 'Showroom Item',
+  type: 'document',
+  fields: [
+    defineField({name: 'title', type: 'string', validation: Rule => Rule.required()}),
+    defineField({name: 'slug', type: 'slug', options: {source: 'title'}}),
+    defineField({name: 'mainImage', type: 'image', options: {hotspot: true}, validation: Rule => Rule.required()}),
+    defineField({name: 'altText', type: 'string', validation: Rule => Rule.required()}),
+    defineField({
+      name: 'category',
+      type: 'string',
+      options: {list: ['suit', 'tuxedo', 'jacket', 'shirt', 'shoes', 'accessories', 'rental_look', 'other']},
+    }),
+    defineField({name: 'sourceDriveFileId', type: 'string', readOnly: true}),
+    defineField({name: 'approvedForWebsite', type: 'boolean', initialValue: false}),
+    defineField({
+      name: 'status',
+      type: 'string',
+      options: {list: ['intake', 'ready', 'scheduled', 'published', 'archived', 'sold', 'rejected']},
+      initialValue: 'intake',
+    }),
+    defineField({name: 'publishedAt', type: 'datetime'}),
+    defineField({name: 'archiveAt', type: 'datetime'}),
+    defineField({name: 'internalNotes', type: 'text'}),
+  ],
+})
+```
+
+### 12.5 RDF/OWL/graph export
+
+RDF/OWL should be treated as an optional later export, not a v0 dependency.
+
+Use it when:
+
+- cross-client relationship queries become important;
+- formal inference is needed;
+- external semantic-web interoperability is valuable;
+- the ontology grows beyond YAML lookup patterns.
+
+Example Turtle-style export from a simple relationship:
+
+```ttl
+@prefix co: <https://papi.ai/ontology/client#> .
+@prefix jmd: <https://papi.ai/ontology/clients/jmd-menswear#> .
+
+jmd:InventoryImage a co:WorkProductEntity ;
+  co:createsOrUpdates jmd:SanityAsset ;
+  co:governedBy jmd:NoRawDrivePublishRule .
+
+jmd:NoRawDrivePublishRule a co:BlockingRule ;
+  co:statement "Raw Drive uploads must not publish directly to the public website." .
+```
+
+---
+
+## 13. Validation and tooling
+
+### 13.1 Minimum validator responsibilities
+
+A validator should check:
+
+- YAML/JSON parse success;
+- required fields exist;
+- IDs are unique within module;
+- referenced entities exist;
+- referenced source IDs exist;
+- active/approved claims have evidence;
+- public-facing rules have either evidence or explicit draft status;
+- projections reference existing modules/rules/entities;
+- handoff exports do not include obvious private paths or secrets unless explicitly marked internal.
+
+### 13.2 Python validator sketch
+
+```python
+#!/usr/bin/env python3
+"""Validate client ontology modules.
+
+This is a sketch for docs/spec.md. The production version should live in
+`tools/validate_ontology.py` and load JSON Schemas from `schemas/`.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import yaml
+
+REQUIRED_MODULE_FIELDS = {"schema_version", "kind", "id", "client_id", "status"}
+PUBLIC_STATUSES = {"active", "approved", "owner_reviewed_internal"}
+SECRET_PATTERNS = ["token", "secret", "api_key", "oauth", "password"]
+
+
+def load_yaml(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: root must be a mapping")
+    return data
+
+
+def validate_module(path: Path) -> list[str]:
+    errors: list[str] = []
+    data = load_yaml(path)
+
+    missing = REQUIRED_MODULE_FIELDS - set(data)
+    if missing:
+        errors.append(f"{path}: missing required fields: {sorted(missing)}")
+
+    source_ids = {src.get("id") for src in data.get("evidence_sources", []) if isinstance(src, dict)}
+    entity_ids = {ent.get("id") for ent in data.get("entities", []) if isinstance(ent, dict)}
+
+    if len(entity_ids) != len([ent for ent in data.get("entities", []) if isinstance(ent, dict)]):
+        errors.append(f"{path}: duplicate or missing entity IDs")
+
+    for rel in data.get("relationships", []):
+        if not isinstance(rel, dict):
+            continue
+        for field in ("subject", "object"):
+            value = rel.get(field)
+            if value and value not in entity_ids:
+                errors.append(f"{path}: relationship {rel.get('id')} references unknown {field}: {value}")
+
+    for claim in data.get("claims", []):
+        if not isinstance(claim, dict):
+            continue
+        status = claim.get("status")
+        if status in PUBLIC_STATUSES and not claim.get("evidence"):
+            errors.append(f"{path}: public-safe claim {claim.get('id')} lacks evidence")
+
+    text = path.read_text(encoding="utf-8").lower()
+    for pattern in SECRET_PATTERNS:
+        if pattern in text:
+            # This is intentionally conservative; allowlist later with explicit fields.
+            errors.append(f"{path}: possible secret-bearing term found: {pattern}")
+
+    for src_ref in _iter_source_refs(data):
+        if source_ids and src_ref not in source_ids:
+            errors.append(f"{path}: unknown evidence source_id: {src_ref}")
+
+    return errors
+
+
+def _iter_source_refs(value):
+    if isinstance(value, dict):
+        if "source_id" in value:
+            yield value["source_id"]
+        for child in value.values():
+            yield from _iter_source_refs(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_source_refs(child)
+
+
+def main(root: str) -> int:
+    root_path = Path(root)
+    errors: list[str] = []
+    for path in root_path.glob("clients/*/modules/*.yaml"):
+        errors.extend(validate_module(path))
+
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 1
+
+    print("ontology validation passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1] if len(sys.argv) > 1 else "."))
+```
+
+### 13.3 JSON Schema sketch
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papi.ai/schemas/client-ontology-module.schema.json",
+  "title": "Client Ontology Module",
+  "type": "object",
+  "required": ["schema_version", "kind", "id", "client_id", "status"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "kind": {"const": "ontology_module"},
+    "id": {"type": "string", "pattern": "^[a-z0-9_.-]+$"},
+    "title": {"type": "string"},
+    "client_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "status": {"enum": ["draft", "proposed", "active", "deprecated"]},
+    "workstreams": {"type": "array", "items": {"type": "string"}},
+    "entities": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entity"}
+    },
+    "relationships": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/relationship"}
+    },
+    "rules": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/rule"}
+    }
+  },
+  "$defs": {
+    "entity": {
+      "type": "object",
+      "required": ["id", "label", "description", "entity_type"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Z][A-Za-z0-9]+$"},
+        "label": {"type": "string"},
+        "description": {"type": "string"},
+        "entity_type": {"type": "string"},
+        "public_facing": {"type": "boolean"},
+        "workstreams": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["id", "subject", "predicate", "object"],
+      "properties": {
+        "id": {"type": "string"},
+        "subject": {"type": "string"},
+        "predicate": {"type": "string"},
+        "object": {"type": "string"},
+        "cardinality": {"enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many", "unknown"]}
+      }
+    },
+    "rule": {
+      "type": "object",
+      "required": ["id", "title", "status", "severity", "statement"],
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "status": {"enum": ["draft", "proposed", "active", "deprecated", "prohibited"]},
+        "severity": {"enum": ["info", "warning", "blocking", "approval_required"]},
+        "statement": {"type": "string"},
+        "machine_check": {"type": "object"}
+      }
+    }
+  }
+}
+```
+
+---
+
+## 14. Consumer patterns
+
+### 14.1 Generic TypeScript ontology loader
+
+```ts
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import yaml from 'yaml'
+
+export type OntologyRule = {
+  id: string
+  title: string
+  status: 'draft' | 'proposed' | 'active' | 'deprecated' | 'prohibited'
+  severity: 'info' | 'warning' | 'blocking' | 'approval_required'
+  statement: string
+  machine_check?: Record<string, unknown>
+}
+
+export type OntologyModule = {
+  schema_version: string
+  kind: 'ontology_module'
+  id: string
+  client_id: string
+  status: string
+  rules?: OntologyRule[]
+}
+
+export async function loadOntologyModule(filePath: string): Promise<OntologyModule> {
+  const raw = await fs.readFile(filePath, 'utf8')
+  const data = yaml.parse(raw) as OntologyModule
+  if (data.kind !== 'ontology_module') {
+    throw new Error(`${filePath} is not an ontology module`)
+  }
+  return data
+}
+
+export function activeBlockingRules(module: OntologyModule): OntologyRule[] {
+  return (module.rules ?? []).filter(
+    rule => ['active', 'approved', 'prohibited'].includes(rule.status) && rule.severity === 'blocking',
+  )
+}
+
+export async function loadProjectionRules(root: string, projection: {modules: string[]}): Promise<OntologyRule[]> {
+  const rules: OntologyRule[] = []
+  for (const modulePath of projection.modules) {
+    const mod = await loadOntologyModule(path.join(root, modulePath))
+    rules.push(...activeBlockingRules(mod))
+  }
+  return rules
+}
+```
+
+### 14.2 Generic copy/content check
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Violation:
+    rule_id: str
+    message: str
+    severity: str
+
+
+def check_disallowed_terms(text: str, rules: list[dict]) -> list[Violation]:
+    lower = text.lower()
+    violations: list[Violation] = []
+    for rule in rules:
+        machine_check = rule.get("machine_check") or {}
+        if machine_check.get("type") != "disallowed_terms":
+            continue
+        for term in machine_check.get("disallowed_terms", []):
+            if term.lower() in lower:
+                violations.append(
+                    Violation(
+                        rule_id=rule["id"],
+                        message=f"Disallowed term found: {term}",
+                        severity=rule.get("severity", "warning"),
+                    )
+                )
+    return violations
+```
+
+### 14.3 Generic status transition check
+
+```python
+ALLOWED_TRANSITIONS = {
+    "raw_uploaded": {"needs_review", "rejected"},
+    "needs_review": {"approved", "rejected"},
+    "approved": {"scheduled", "archived"},
+    "scheduled": {"published", "archived"},
+    "published": {"archived", "sold"},
+    "archived": {"approved"},
+    "rejected": set(),
+    "error": {"needs_review"},
+}
+
+
+def assert_transition_allowed(old: str, new: str) -> None:
+    if new not in ALLOWED_TRANSITIONS.get(old, set()):
+        raise ValueError(f"Illegal status transition: {old} -> {new}")
+```
+
+---
+
+## 15. Client-specific module seeds based on verified context
+
+This section gives starter module seeds. They are not complete canonical ontology modules yet. Before public/live use, each client file must include evidence on each fact/rule.
+
+### 15.1 Femme Events verified context summary
+
+Verified from inspected sources:
+
+- Femme Events is a wedding coordination + partial planning / design brand.
+- Co-founders in the wiki source: Amanda Brewton and Karan Sabnani.
+- Market: Metro Atlanta wedding coordination/design.
+- Website: `https://femmeevents.com`.
+- Current repo path in wiki: `/Users/creator/projects/femme-events/website/Femme Events Website Build/Femme-Events-Website`.
+- GitHub website repo verified: `sabnanikl-dev/Femme-Events-Website`.
+- Visibility ops repo verified: `sabnanikl-dev/Femme-visibility`.
+- Femme website README verified stack: React + TypeScript, Vite, Tailwind CSS, React Router, Sanity CMS, Formspree.
+- Local SEO source of truth identifies canonical phone `(678) 644-5257`, public email `Amanda@FemmeEvents.com`, public address posture as service-area/no storefront, and live package names `In Your Corner`, `Getting It Together`, `The Full Femme`.
+- Public/account mutations remain approval-gated in the visibility source of truth and AGENTS.md.
+
+Starter module outline:
+
+```yaml
+schema_version: "0.1"
+kind: ontology_module
+id: femme.website
+client_id: femme-events
+status: draft
+title: "Femme Events Website Ontology"
+workstreams:
+  - website
+  - cms_content
+  - inquiry_ops
+
+evidence_sources:
+  - id: femme-overview
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Overview.md"
+  - id: femme-website-readme
+    type: git_repo_file
+    path: "/Users/creator/projects/Femme-Events-Website/README.md"
+  - id: femme-local-seo-sot
+    type: local_project_doc
+    path: "/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md"
+
+entities:
+  - id: WebsitePage
+    label: Website Page
+    entity_type: work_product
+    description: "A public page or route on the Femme Events website."
+    public_facing: true
+  - id: ServicePackage
+    label: Service Package
+    entity_type: business_object
+    description: "A public Femme Events service/package offering."
+    public_facing: true
+  - id: SanityDocument
+    label: Sanity Document
+    entity_type: content_record
+    description: "CMS-backed website content served from Sanity."
+    public_facing: true
+  - id: StaticFallbackData
+    label: Static Fallback Data
+    entity_type: content_record
+    description: "Repo-stored fallback data used when Sanity is unavailable or incomplete."
+    public_facing: true
+  - id: InquiryForm
+    label: Inquiry Form
+    entity_type: work_product
+    description: "Website form that routes inquiries through Formspree."
+    public_facing: true
+
+relationships:
+  - id: femme.page.contains_service_package
+    subject: WebsitePage
+    predicate: contains
+    object: ServicePackage
+  - id: femme.sanity.merges_with_fallback
+    subject: SanityDocument
+    predicate: merges_with
+    object: StaticFallbackData
+  - id: femme.cta.targets_inquiry_form
+    subject: WebsitePage
+    predicate: targets
+    object: InquiryForm
+
+rules:
+  - id: femme.public_mutations.require_approval
+    title: "Public/account mutations require explicit approval"
+    status: active
+    severity: approval_required
+    statement: "Website, GBP, directory, review, social, and public-account mutations require explicit approval before execution."
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "32-40"
+```
+
+### 15.2 Femme visibility module seed
+
+```yaml
+schema_version: "0.1"
+kind: ontology_module
+id: femme.local_visibility
+client_id: femme-events
+status: draft
+title: "Femme Events Local Visibility Ontology"
+workstreams:
+  - local_visibility
+  - reporting
+
+evidence_sources:
+  - id: femme-local-seo-sot
+    type: local_project_doc
+    path: "/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md"
+  - id: linear-papi-44
+    type: linear_issue
+    identifier: PAPI-44
+    url: "https://linear.app/papi-consultants/issue/PAPI-44/task-03-create-local-seo-source-of-truth-and-claims-guardrails"
+  - id: linear-papi-56
+    type: linear_issue
+    identifier: PAPI-56
+    url: "https://linear.app/papi-consultants/issue/PAPI-56/review-and-approve-femme-local-seo-source-of-truth"
+
+entities:
+  - id: GoogleBusinessProfile
+    label: Google Business Profile
+    entity_type: system_resource
+    public_facing: true
+    description: "Femme Events public Google Business Profile."
+  - id: CitationListing
+    label: Citation Listing
+    entity_type: work_product
+    public_facing: true
+    description: "A directory or citation profile for local visibility."
+  - id: BusinessFact
+    label: Business Fact
+    entity_type: governance_object
+    public_facing: true
+    description: "A canonical public fact such as phone, email, website, category, service area, or address posture."
+  - id: ReviewRequest
+    label: Review Request
+    entity_type: work_product
+    public_facing: true
+    description: "A message/template/request asking for a customer review."
+
+rules:
+  - id: femme.visibility.no_public_address_without_approval
+    title: "Do not publish a street address without approval"
+    status: active
+    severity: blocking
+    statement: "Femme Events should remain service-area/no public storefront unless Amanda/Karan explicitly approve a public address later."
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "59-89"
+```
+
+### 15.3 JMD Menswear verified context summary
+
+Verified from inspected sources:
+
+- JMD Menswear is a specialty men's formal wear store in Conyers, GA.
+- Owners in the wiki source: Lucky and Danny.
+- Business model includes sales and rentals.
+- Differentiator in the wiki source: one size per style / one-of-a-kind pieces / when it is gone, it is gone.
+- Key constraints in the wiki source: Lucky does not want AI slop; Danny is cautious about e-commerce; e-commerce deferred.
+- JMD project files live under `/Users/creator/projects/consultancy/JMD-Menswear/`.
+- GitHub website/harness repo verified: `sabnanikl-dev/jmd-6-holding-page-harness`.
+- Draft inventory automation plan recommends Google Drive intake, Sanity website backend/content model, an operational ledger, and a scheduled automation runner. The plan is explicitly draft for Karan review and no live account changes authorized.
+- JMD inventory plan states the website needs a showroom feed, not e-commerce, and public language should avoid guaranteed availability, quantities, checkout, or warehouse vibes.
+- Linear issue `JMD-23` exists for deterministic Google Drive → Sanity photo automation; `JMD-30` exists for creating a JMD client operating ontology v0.
+
+Starter module outline:
+
+```yaml
+schema_version: "0.1"
+kind: ontology_module
+id: jmd.website_showroom
+client_id: jmd-menswear
+status: draft
+title: "JMD Website Showroom Ontology"
+workstreams:
+  - website_showroom
+  - local_visibility
+
+evidence_sources:
+  - id: jmd-client-note
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/consultancy/clients/JMD/Client JMD Menswear.md"
+  - id: jmd-inventory-plan
+    type: local_project_doc
+    path: "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/docs/research/inventory-backend-automation-plan.md"
+
+entities:
+  - id: WebsitePage
+    label: Website Page
+    entity_type: work_product
+    public_facing: true
+    description: "A public page or route on the JMD website."
+  - id: ShowroomCard
+    label: Showroom Card
+    entity_type: work_product
+    public_facing: true
+    description: "A website card representing a visual showroom highlight, not a purchasable SKU."
+  - id: GarmentCategory
+    label: Garment Category
+    entity_type: business_object
+    public_facing: true
+    description: "A category of formalwear or accessory offered/showcased by JMD."
+  - id: ApprovedClaim
+    label: Approved Claim
+    entity_type: governance_object
+    public_facing: true
+    description: "A public-safe claim with evidence/approval."
+
+rules:
+  - id: jmd.website.showroom_not_ecommerce
+    title: "Website is showroom, not ecommerce"
+    status: active
+    severity: blocking
+    statement: "JMD website content must frame inventory as showroom highlights, not live e-commerce inventory."
+    evidence:
+      - source_id: jmd-client-note
+        lines: "51-54"
+      - source_id: jmd-inventory-plan
+        lines: "20-27,233-237"
+```
+
+### 15.4 JMD inventory image module seed
+
+```yaml
+schema_version: "0.1"
+kind: ontology_module
+id: jmd.inventory_images
+client_id: jmd-menswear
+status: draft
+title: "JMD Inventory Images and Showroom Sync Ontology"
+workstreams:
+  - inventory_images
+  - website_showroom
+
+evidence_sources:
+  - id: jmd-inventory-plan
+    type: local_project_doc
+    path: "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/docs/research/inventory-backend-automation-plan.md"
+  - id: linear-jmd-23
+    type: linear_issue
+    identifier: JMD-23
+    url: "https://linear.app/papi-consultants/issue/JMD-23/build-deterministic-google-drive-to-sanity-photo-automation-for-jmd"
+
+entities:
+  - id: DriveFolder
+    label: Drive Folder
+    entity_type: system_resource
+    description: "Google Drive folder used for JMD image intake, approval, import, publication, or archive organization."
+  - id: InventoryImage
+    label: Inventory Image
+    entity_type: media_asset
+    public_facing: true
+    description: "Image uploaded for potential use in the JMD showroom workflow."
+  - id: ApprovalLedgerEntry
+    label: Approval Ledger Entry
+    entity_type: workflow_artifact
+    description: "Record of Drive file status, approval status, import status, publish/archive status, notes, and errors."
+  - id: SanityAsset
+    label: Sanity Asset
+    entity_type: media_asset
+    public_facing: true
+    description: "Image asset uploaded to Sanity for website delivery."
+  - id: ShowroomItem
+    label: Showroom Item
+    entity_type: content_record
+    public_facing: true
+    description: "Sanity document representing a visual showroom highlight."
+  - id: SyncRun
+    label: Sync Run
+    entity_type: workflow_artifact
+    description: "A deterministic reconciliation execution and its summary."
+
+relationships:
+  - id: jmd.drive_folder.contains_inventory_image
+    subject: DriveFolder
+    predicate: contains
+    object: InventoryImage
+  - id: jmd.inventory_image.creates_sanity_asset
+    subject: InventoryImage
+    predicate: creates_or_updates
+    object: SanityAsset
+  - id: jmd.sanity_asset.used_by_showroom_item
+    subject: SanityAsset
+    predicate: used_by
+    object: ShowroomItem
+  - id: jmd.sync_run.records_approval_ledger_entry
+    subject: SyncRun
+    predicate: creates_or_updates
+    object: ApprovalLedgerEntry
+
+state_machines:
+  - id: jmd.inventory_image.lifecycle
+    entity: InventoryImage
+    states:
+      raw_uploaded:
+        public: false
+        next: [needs_review, rejected]
+      needs_review:
+        public: false
+        next: [approved, rejected]
+      approved:
+        public: false
+        next: [scheduled, archived]
+      scheduled:
+        public: false
+        next: [published, archived]
+      published:
+        public: true
+        next: [archived, sold]
+      archived:
+        public: false
+        next: [approved]
+      rejected:
+        public: false
+        next: []
+      error:
+        public: false
+        next: [needs_review]
+
+rules:
+  - id: jmd.inventory.raw_uploads_do_not_publish
+    title: "Raw uploads do not publish directly"
+    status: active
+    severity: blocking
+    statement: "Images in raw intake must not publish directly to the public website."
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "184-202,238-272"
+  - id: jmd.inventory.website_reads_sanity_not_drive
+    title: "Website reads Sanity, not Drive"
+    status: proposed
+    severity: blocking
+    statement: "The public website should read showroom content from Sanity or another approved backend/CDN, not directly from Google Drive."
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "10-18,53-72,166-182"
+```
+
+---
+
+## 16. Relationship to existing systems
+
+### 16.1 Obsidian/wiki
+
+The wiki remains a narrative knowledge layer. It explains background, context, decisions, and lessons.
+
+The ontology stores structured facts, entities, rules, and evidence references.
+
+Example split:
+
+```text
+Wiki: "Danny is cautious about e-commerce because returns and one-of-a-kind inventory create operational risk."
+Ontology: jmd.website.showroom_not_ecommerce = active blocking rule.
+```
+
+### 16.2 Skills/procedural instructions
+
+Skills remain procedural. They tell agents/tools how to perform work.
+
+Ontology remains semantic. It tells consumers what exists and what rules govern it.
+
+Example split:
+
+```text
+Ontology: Public JMD showroom cards cannot use checkout/live-stock language.
+Skill/procedure: Before drafting or reviewing JMD website copy, scan for disallowed terms and verify approved claims.
+```
+
+### 16.3 Repos
+
+Repos own implementation-specific docs and code. They should receive projections, not the entire canonical ontology.
+
+Example:
+
+```text
+client-ontologies/clients/jmd-menswear/modules/inventory-images.yaml
+  ↓ projection
+jmd-6-holding-page-harness/docs/ontology/inventory-automation.yaml
+  ↓ implementation
+Sanity schema + n8n/GitHub/Vercel automation + website rendering
+```
+
+### 16.4 Linear/GitHub issues
+
+Project trackers own execution status.
+
+Ontology can be referenced from issues and acceptance criteria.
+
+Example issue section:
+
+```markdown
+## Ontology references
+
+- `jmd.inventory.raw_uploads_do_not_publish`
+- `jmd.inventory.website_reads_sanity_not_drive`
+- `jmd.website.showroom_not_ecommerce`
+
+## Acceptance criteria
+
+- Raw Drive files cannot transition directly to published.
+- Website queries Sanity `showroomItem` records only.
+- Public copy avoids checkout, live stock, stock count, and guaranteed availability language.
+```
+
+---
+
+## 17. Governance workflow
+
+### 17.1 Proposed contribution lifecycle
+
+1. Identify the workstream and client.
+2. Inspect current source material: wiki, repo docs, local docs, GitHub, Linear, client approvals.
+3. Add or update module facts as `draft` unless already evidence-backed.
+4. Add evidence sources and line/path/URL references.
+5. Run ontology validator.
+6. If public/client-facing, request human review/approval.
+7. Mark facts/rules `active` or `approved` only after evidence and approval are recorded.
+8. Generate projections/handoff docs.
+9. Commit ontology changes with a scoped message.
+
+### 17.2 Commit message examples
+
+```text
+docs: add client ontology spec v0.1
+feat: add jmd inventory image ontology draft
+feat: add femme visibility ontology projection
+chore: add ontology validation schema
+```
+
+### 17.3 Review checklist
+
+Before merging an ontology change:
+
+- [ ] No secrets or credentials.
+- [ ] No unverified public claims marked active/approved.
+- [ ] Every public-facing claim has evidence.
+- [ ] Every rule has a status and severity.
+- [ ] Projections only include relevant slices.
+- [ ] Handoff docs are safe for their intended audience.
+- [ ] Agent-specific behavior is not embedded in canonical modules.
+- [ ] Unknowns remain labeled as unknown instead of normalized silently.
+
+---
+
+## 18. Open decisions
+
+These should become ADRs or follow-up issues before heavy implementation.
+
+### 18.1 Canonical repo and projection workflow
+
+Decision needed:
+
+- Does `client-ontologies` become the only canonical ontology source?
+- Do client project folders keep copies?
+- Are repo projections generated into implementation repos by script or copied manually at first?
+
+Recommended v0:
+
+```text
+client-ontologies = canonical ontology source
+implementation repos = projection consumers
+wiki = narrative/context index
+```
+
+### 18.2 Database/export timing
+
+Decision needed:
+
+- When does SQLite export become necessary?
+- When does Postgres become necessary?
+
+Recommended v0:
+
+```text
+Do not add runtime DB until at least one consumer needs structured lookup beyond file reads.
+```
+
+### 18.3 Client handoff standard
+
+Decision needed:
+
+- What qualifies a handoff doc as client-ready?
+- Who approves handoff docs before sharing?
+
+Recommended v0:
+
+```text
+Handoff docs are generated/curated from ontology but require human review before sharing externally.
+```
+
+### 18.4 JMD inventory approval mechanism
+
+The inspected JMD inventory plan lists open approval questions:
+
+- Sanity as backend/CMS?
+- Approval based on raw Drive age or approved age?
+- Approval by Drive folder movement, Sheet status, or Sanity Studio?
+- Next/Vercel now or GitHub Actions first?
+- Current repo vs real execution repo?
+
+Until those are resolved, the JMD inventory module should remain draft/proposed where the rule depends on those decisions.
+
+---
+
+## 19. Initial implementation plan after this spec
+
+This is not yet execution approval. It is the recommended next sequence.
+
+### Phase 1 — Repository foundation
+
+- Add `schemas/` with initial JSON Schemas.
+- Add `tools/validate_ontology.py`.
+- Add `templates/` for `cms-website`, `local-visibility`, and `inventory-image-automation`.
+- Add a no-secret validation check.
+
+### Phase 2 — Femme v0 ontology
+
+- Add `clients/femme-events/client.yaml`.
+- Add modules:
+  - `website.yaml`
+  - `cms.yaml`
+  - `brand-content.yaml`
+  - `local-visibility.yaml`
+  - `approvals.yaml`
+- Add projections:
+  - `website-repo.yaml`
+  - `visibility-repo.yaml`
+  - `handoff.yaml`
+
+### Phase 3 — JMD v0 ontology
+
+- Add `clients/jmd-menswear/client.yaml`.
+- Add modules:
+  - `website-showroom.yaml`
+  - `inventory-images.yaml`
+  - `local-visibility.yaml`
+  - `approvals.yaml`
+  - `reporting.yaml`
+- Add projections:
+  - `website-repo.yaml`
+  - `inventory-automation.yaml`
+  - `handoff.yaml`
+
+### Phase 4 — Projection and handoff generation
+
+- Generate repo-specific projections into `clients/*/projections/`.
+- Generate curated handoff docs into `clients/*/handoff/`.
+- Do not copy projections into client implementation repos until reviewed.
+
+---
+
+## 20. Glossary
+
+**Client Operating Ontology**  
+A structured, version-controlled model of a client's workstreams, entities, relationships, rules, approvals, systems, and handoff artifacts.
+
+**Canonical ontology**  
+The reviewed source files in this repo.
+
+**Projection**  
+A smaller repo/workflow/handoff-specific slice of the canonical ontology.
+
+**Workstream**  
+A category of active or planned client work, such as website, visibility, inventory images, reporting, or CMS content.
+
+**Entity**  
+A business object, work product, system resource, content record, workflow artifact, or governance object.
+
+**Relationship**  
+A typed connection between two entities.
+
+**Rule**  
+A constraint, requirement, approval gate, or public-safety guardrail.
+
+**Evidence source**  
+A note, file, repo, issue, URL, API snapshot, or approval record used to justify a fact/rule.
+
+**Handoff export**  
+A client- or operator-facing explanation generated or curated from ontology content.
+
+---
+
+## 21. Summary
+
+The v0 ontology should be:
+
+- workstream-first;
+- evidence-backed;
+- agent-agnostic;
+- version-controlled;
+- projection-friendly;
+- handoff-aware;
+- database-exportable later;
+- strict about approvals and public claims.
+
+The key architectural choice is to treat the ontology as a **semantic contract above repos and tools**:
+
+```text
+Canonical client ontology
+  ↓
+Repo/workflow/handoff projections
+  ↓
+Implementation specs, CMS schemas, automation workflows, validation checks
+  ↓
+Client-safe handoff documentation and reusable Papi patterns
+```
+
+This keeps the ontology practical for today's Femme/JMD work while preserving a path toward reusable client operating systems later.
