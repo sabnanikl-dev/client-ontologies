@@ -351,6 +351,8 @@ def validate(root: Path) -> list[str]:
                 if mod_id not in module_ids:
                     errors.append(f"{path}: projection references unknown module: {mod_id}")
             for ent_id in includes.get("entities", []) or []:
+                if not isinstance(ent_id, str):
+                    continue
                 if ent_id.endswith(".*"):
                     prefix = ent_id[:-1]
                     if not any(e.startswith(prefix) for e in entity_ids):
@@ -358,6 +360,8 @@ def validate(root: Path) -> list[str]:
                 elif ent_id not in entity_ids:
                     errors.append(f"{path}: projection references unknown entity: {ent_id}")
             for rule_id in includes.get("rules", []) or []:
+                if not isinstance(rule_id, str):
+                    continue
                 if rule_id.endswith(".*"):
                     prefix = rule_id[:-1]
                     if not any(r.startswith(prefix) for r in rule_ids):
