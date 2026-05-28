@@ -1,0 +1,18 @@
+# Invalid fixture: an unknown top-level field is rejected by additionalProperties:false.
+# (Legitimate extensions must be namespaced with an `x_` prefix.)
+schema_version: "0.1"
+kind: client
+id: demo
+name: Demo
+status: active
+bogus_field: "not allowed"
+source_registry:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+privacy:
+  secret_policy: "No secrets."
+workstreams:
+  - id: brand
+    status: active

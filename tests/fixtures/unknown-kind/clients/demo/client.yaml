@@ -1,0 +1,16 @@
+# Invalid fixture: `kind` is not one of client / ontology_module / projection.
+schema_version: "0.1"
+kind: manifesto
+id: demo
+name: Demo
+status: active
+source_registry:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+privacy:
+  secret_policy: "No secrets."
+workstreams:
+  - id: brand
+    status: active

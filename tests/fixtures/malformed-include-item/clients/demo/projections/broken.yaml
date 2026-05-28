@@ -1,0 +1,18 @@
+# Invalid fixture: an `includes` item is a non-string scalar.
+# The schema layer must report a type error AND the cross-reference pass must not
+# crash (regression test: previously raised AttributeError on ent_id.endswith(...)).
+schema_version: "0.1"
+kind: projection
+id: demo.website.public
+client_id: demo
+status: active
+projection_target:
+  type: sqlite
+includes:
+  entities:
+    - 123
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."

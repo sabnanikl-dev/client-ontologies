@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papi.ai/schemas/evidence.schema.json",
+  "title": "Evidence sources and references",
+  "description": "Schemas for source-registry / evidence_sources entries and for the evidence references that cite them. source_ids are file-local; cross-reference resolution is enforced in scripts/validate_ontology.py.",
+  "$defs": {
+    "sourceType": {
+      "enum": [
+        "obsidian_note",
+        "local_project_doc",
+        "git_repo_file",
+        "github_issue",
+        "github_pr",
+        "linear_issue",
+        "client_email_or_message",
+        "public_url",
+        "api_readonly_snapshot",
+        "human_approval_record",
+        "user_preference"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "required": ["id", "type", "description"],
+      "properties": {
+        "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "type": {"$ref": "#/$defs/sourceType"},
+        "path": {"type": "string"},
+        "url": {"type": "string"},
+        "identifier": {"type": "string"},
+        "description": {"type": "string"}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    },
+    "evidenceRef": {
+      "type": "object",
+      "required": ["source_id"],
+      "properties": {
+        "source_id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "lines": {"type": "string"},
+        "note": {"type": "string"}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    },
+    "evidenceList": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidenceRef"}
+    }
+  }
+}

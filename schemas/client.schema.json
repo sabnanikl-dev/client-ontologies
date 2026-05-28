@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papi.ai/schemas/client.schema.json",
+  "title": "Client (kind: client)",
+  "description": "Client-level metadata: client-wide source registry, privacy posture, and declared workstreams.",
+  "type": "object",
+  "required": ["schema_version", "kind", "id", "name", "status", "source_registry", "privacy", "workstreams"],
+  "properties": {
+    "schema_version": {"const": "0.1"},
+    "kind": {"const": "client"},
+    "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+    "name": {"type": "string"},
+    "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"},
+    "client_type": {"type": "string"},
+    "source_registry": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "https://papi.ai/schemas/evidence.schema.json#/$defs/source"}
+    },
+    "privacy": {
+      "type": "object",
+      "required": ["secret_policy"],
+      "properties": {
+        "public_handoff_allowed": {"type": "boolean"},
+        "contains_private_context": {"type": "boolean"},
+        "secret_policy": {"type": "string"}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    },
+    "workstreams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string"},
+          "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"}
+        },
+        "additionalProperties": false,
+        "patternProperties": {"^x_": {}}
+      }
+    }
+  },
+  "additionalProperties": false,
+  "patternProperties": {"^x_": {}}
+}

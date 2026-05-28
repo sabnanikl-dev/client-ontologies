@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papi.ai/schemas/projection.schema.json",
+  "title": "Projection (kind: projection)",
+  "description": "A curated, consumer-facing slice that lists module/entity/rule IDs from canonical modules. Resolution of the listed IDs (and `.*` wildcards) is enforced in scripts/validate_ontology.py.",
+  "type": "object",
+  "required": ["schema_version", "kind", "id", "client_id", "status", "projection_target", "includes", "evidence_sources"],
+  "properties": {
+    "schema_version": {"const": "0.1"},
+    "kind": {"const": "projection"},
+    "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+    "client_id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+    "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"},
+    "projection_target": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"type": "string"},
+        "consumer": {"type": "string"},
+        "visibility": {"type": "string"},
+        "repo": {"type": "string"},
+        "target_ref": {"type": "string"},
+        "local_paths": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    },
+    "includes": {
+      "type": "object",
+      "properties": {
+        "modules": {"type": "array", "items": {"type": "string"}},
+        "entities": {"type": "array", "items": {"type": "string"}},
+        "rules": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    },
+    "outputs": {
+      "type": "object",
+      "properties": {
+        "format": {"type": "string"},
+        "note": {"type": "string"}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    },
+    "evidence_sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "https://papi.ai/schemas/evidence.schema.json#/$defs/source"}
+    }
+  },
+  "additionalProperties": false,
+  "patternProperties": {"^x_": {}}
+}
