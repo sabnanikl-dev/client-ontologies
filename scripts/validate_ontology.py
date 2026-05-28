@@ -403,6 +403,8 @@ def validate(root: Path) -> list[str]:
                     if not rel_path:
                         errors.append(f"{path}: {section} entry missing path (id={decl_id!r})")
                         continue
+                    if not isinstance(rel_path, str):
+                        continue  # schema layer reports the type error
                     declared_paths.add(rel_path)
                     target = (client_dir / rel_path).resolve()
                     if not target.is_relative_to(client_root):

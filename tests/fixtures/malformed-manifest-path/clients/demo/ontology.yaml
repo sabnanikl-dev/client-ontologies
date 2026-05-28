@@ -1,0 +1,12 @@
+# Invalid fixture: a manifest entry `path` is a non-string scalar.
+# The schema layer must report a type error AND the manifest cross-reference pass
+# must not crash (regression test: previously raised TypeError on client_dir / 123).
+schema_version: "0.1"
+kind: ontology
+id: demo.ontology
+client_id: demo
+status: active
+modules:
+  - path: 123
+    id: demo.brand
+projections: []

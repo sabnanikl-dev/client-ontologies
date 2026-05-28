@@ -27,6 +27,7 @@ CASES = [
     ("unknown-field", "unknown field not permitted"),
     ("malformed-includes", "expected type object"),
     ("malformed-include-item", "expected type string"),
+    ("malformed-manifest-path", "expected type string"),
 ]
 
 
