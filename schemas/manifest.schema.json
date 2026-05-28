@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papi.ai/schemas/manifest.schema.json",
+  "title": "Ontology manifest (kind: ontology)",
+  "description": "Per-client manifest and stable entry point: lists the canonical modules and curated projections for one client. Path/id resolution and the module/projection membership cross-checks are enforced in scripts/validate_ontology.py.",
+  "type": "object",
+  "required": ["schema_version", "kind", "id", "client_id", "status", "modules", "projections"],
+  "properties": {
+    "schema_version": {"const": "0.1"},
+    "kind": {"const": "ontology"},
+    "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+    "client_id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+    "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"},
+    "modules": {"type": "array", "items": {"$ref": "#/$defs/manifestEntry"}},
+    "projections": {"type": "array", "items": {"$ref": "#/$defs/manifestEntry"}},
+    "handoff_outputs": {"type": "array"},
+    "templates": {"type": "array"},
+    "notes": {"type": "string"}
+  },
+  "$defs": {
+    "manifestEntry": {
+      "type": "object",
+      "required": ["path", "id"],
+      "properties": {
+        "path": {"type": "string"},
+        "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    }
+  },
+  "additionalProperties": false,
+  "patternProperties": {"^x_": {}}
+}

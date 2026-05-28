@@ -5,6 +5,7 @@
   "description": "Umbrella schema that dispatches an ontology file to the matching per-kind schema by its `kind`. The deterministic validator in scripts/validate_ontology.py loads the per-kind schemas directly (selecting by `kind`) and then applies cross-reference, evidence, and secret-scan rules JSON Schema cannot express.",
   "oneOf": [
     {"$ref": "https://papi.ai/schemas/client.schema.json"},
+    {"$ref": "https://papi.ai/schemas/manifest.schema.json"},
     {"$ref": "https://papi.ai/schemas/module.schema.json"},
     {"$ref": "https://papi.ai/schemas/projection.schema.json"}
   ]

@@ -65,7 +65,7 @@ Agents and automations may draft, reconcile, validate, and recommend from ontolo
 
 ## Schema enforcement and extensions
 
-Every file is validated against the JSON Schema for its `kind` (`schemas/client.schema.json`, `module.schema.json`, or `projection.schema.json`) before the deterministic cross-reference checks run. The schemas are strict: structured objects use `additionalProperties: false`, so unknown fields fail validation. To add a field the schema does not yet model, namespace it with an `x_` prefix (e.g. `x_internal_note`); promote it to a real schema property once it stabilises. The free-form `entity.fields` bag and `rule.machine_check` body remain intentionally open.
+Every file is validated against the JSON Schema for its `kind` (`schemas/client.schema.json`, `manifest.schema.json` for the `ontology` manifest, `module.schema.json`, or `projection.schema.json`) before the deterministic cross-reference checks run. The schemas are strict: structured objects use `additionalProperties: false`, so unknown fields fail validation. To add a field the schema does not yet model, namespace it with an `x_` prefix (e.g. `x_internal_note`); promote it to a real schema property once it stabilises. The free-form `entity.fields` bag and `rule.machine_check` body remain intentionally open.
 
 ## Canonical vs runtime
 
