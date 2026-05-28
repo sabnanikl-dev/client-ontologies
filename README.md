@@ -8,8 +8,9 @@ This repo is the canonical v0.1 YAML source of truth for client ontology facts a
 
 Implemented v0.1 foundation:
 
-- `schemas/ontology.schema.json` — generic schema contract for clients, modules, entities, relationships, rules, evidence sources, and projections.
-- `scripts/validate_ontology.py` — deterministic validator for canonical YAML and cross-file references.
+- `schemas/` — JSON Schema contract, split by resource kind (`client`, `module`, `projection`) over shared `$defs` (`defs`, `evidence`, `rule`); `ontology.schema.json` is the umbrella dispatcher.
+- `scripts/validate_ontology.py` — deterministic validator: enforces the per-kind JSON Schema first, then canonical cross-file reference and evidence rules.
+- `tests/run_fixtures.py` — proves invalid fixtures (`tests/fixtures/`) are rejected for the expected reason.
 - `scripts/export_sqlite.py` — optional runtime export into SQLite after YAML validates.
 - `docs/spec.md` — Client Operating Ontology Spec v0.1.
 - `docs/conventions.md` — ID, status, confidence, source, module, and approval conventions.
@@ -36,9 +37,18 @@ client-ontologies/
     examples.md
   schemas/
     ontology.schema.json
+    defs.schema.json
+    evidence.schema.json
+    rule.schema.json
+    client.schema.json
+    module.schema.json
+    projection.schema.json
   scripts/
     validate_ontology.py
     export_sqlite.py
+  tests/
+    run_fixtures.py
+    fixtures/
   clients/
     femme-events/
       client.yaml
@@ -89,6 +99,7 @@ python3 scripts/validate_ontology.py
 The validator checks:
 
 - YAML parses through Ruby stdlib YAML.
+- Each file validates against the JSON Schema for its `kind` (types, controlled-vocabulary enums, required identity fields, and no unknown fields — extensions must be `x_`-prefixed). Schema enforcement runs before the cross-reference checks.
 - Required fields exist for clients, modules, and projections.
 - IDs are stable, lowercase, and namespaced.
 - Duplicate ontology object IDs are rejected.
@@ -96,6 +107,14 @@ The validator checks:
 - Verified/active/approved facts and rules have evidence.
 - Evidence `source_id` references point to local source registries.
 - Obvious secret patterns and sensitive field names are rejected.
+
+## Test schema enforcement
+
+Negative fixtures prove the validator rejects malformed files (missing required fields, malformed IDs, bad enums, unknown kinds, unknown fields):
+
+```bash
+python3 tests/run_fixtures.py
+```
 
 ## Export SQLite runtime projection
 
