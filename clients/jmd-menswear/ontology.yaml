@@ -1,0 +1,30 @@
+schema_version: "0.1"
+kind: ontology
+id: jmd-menswear.ontology
+client_id: jmd-menswear
+status: active
+modules:
+  - path: modules/brand.yaml
+    id: jmd-menswear.brand
+  - path: modules/website.yaml
+    id: jmd-menswear.website
+  - path: modules/inventory-images.yaml
+    id: jmd-menswear.inventory-images
+  - path: modules/operations.yaml
+    id: jmd-menswear.operations
+projections:
+  - path: projections/agent-context.yaml
+    id: jmd-menswear.agent-context
+  - path: projections/website-build.yaml
+    id: jmd-menswear.website-build
+  - path: projections/inventory-workflow.yaml
+    id: jmd-menswear.inventory-workflow
+handoff_outputs:
+  - id: jmd-menswear.agent-context
+    target: generic_agent
+notes: >
+  Manifest and stable entry point for the JMD Menswear ontology. Agents and
+  scripts should load this file first to discover canonical modules and the
+  curated projections, rather than scanning the client folder. client.yaml
+  holds client metadata, source registry, and privacy posture; this manifest
+  governs module/projection membership.
