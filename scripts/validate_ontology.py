@@ -33,6 +33,7 @@ ALLOWED_SENSITIVE_TERMS = {
 }
 REQUIRED = {
     "client": {"schema_version", "kind", "id", "name", "status", "source_registry", "privacy", "workstreams"},
+    "ontology": {"schema_version", "kind", "id", "client_id", "status", "modules", "projections"},
     "ontology_module": {"schema_version", "kind", "id", "title", "client_id", "status", "workstreams", "evidence_sources", "entities", "relationships", "rules"},
     "projection": {"schema_version", "kind", "id", "client_id", "status", "projection_target", "includes", "evidence_sources"},
 }
@@ -50,7 +51,13 @@ def parse_yaml(path: Path) -> dict[str, Any]:
 
 
 def iter_yaml(root: Path) -> list[Path]:
-    return sorted([*root.glob("clients/*/client.yaml"), *root.glob("clients/*/modules/*.yaml"), *root.glob("clients/*/projections/*.yaml")])
+    # Manifests load first so they are the entry point that pins module/projection membership.
+    return [
+        *sorted(root.glob("clients/*/ontology.yaml")),
+        *sorted(root.glob("clients/*/client.yaml")),
+        *sorted(root.glob("clients/*/modules/*.yaml")),
+        *sorted(root.glob("clients/*/projections/*.yaml")),
+    ]
 
 
 def evidence_refs(value: Any):
@@ -140,17 +147,20 @@ def validate(root: Path) -> list[str]:
         if count > 1:
             errors.append(f"duplicate ID across ontology files: {id_value}")
 
+    docs_by_resolved = {p.resolve(): d for p, d in docs.items()}
+
     for path, data in docs.items():
         kind = data.get("kind")
         client_id = data.get("client_id") or data.get("id")
-        if kind in {"ontology_module", "projection"} and client_id not in client_ids:
+        if kind in {"ontology", "ontology_module", "projection"} and client_id not in client_ids:
             errors.append(f"{path}: client_id does not match an existing client: {client_id}")
         if data.get("id") and client_id and not data.get("id").startswith(str(client_id)):
             errors.append(f"{path}: ID should be namespaced with client id {client_id}: {data.get('id')}")
 
         sources_key = "source_registry" if kind == "client" else "evidence_sources"
         source_ids = {src.get("id") for src in data.get(sources_key, []) or [] if isinstance(src, dict)}
-        if kind != "client" and not source_ids:
+        # Manifests are structural pointers, not semantic claims, so they carry no evidence_sources.
+        if kind not in {"client", "ontology"} and not source_ids:
             errors.append(f"{path}: evidence_sources must not be empty")
         for ref in evidence_refs(data):
             if ref not in source_ids:
@@ -208,6 +218,31 @@ def validate(root: Path) -> list[str]:
                         errors.append(f"{path}: projection wildcard has no rule matches: {rule_id}")
                 elif rule_id not in rule_ids:
                     errors.append(f"{path}: projection references unknown rule: {rule_id}")
+        elif kind == "ontology":
+            client_dir = path.parent
+            for section in ("modules", "projections"):
+                declared_paths: set[str] = set()
+                for entry in data.get(section, []) or []:
+                    if not isinstance(entry, dict):
+                        errors.append(f"{path}: {section} entry must be a mapping")
+                        continue
+                    rel_path = entry.get("path")
+                    decl_id = entry.get("id")
+                    if not rel_path:
+                        errors.append(f"{path}: {section} entry missing path (id={decl_id!r})")
+                        continue
+                    declared_paths.add(rel_path)
+                    target = (client_dir / rel_path).resolve()
+                    ref = docs_by_resolved.get(target)
+                    if ref is None:
+                        errors.append(f"{path}: manifest references missing or unparsed {section} file: {rel_path}")
+                        continue
+                    actual_id = ref.get("id")
+                    if decl_id != actual_id:
+                        errors.append(f"{path}: manifest {section} id mismatch for {rel_path}: declared {decl_id!r}, file declares {actual_id!r}")
+                present = {f"{section}/{p.name}" for p in (client_dir / section).glob("*.yaml")}
+                for unregistered in sorted(present - declared_paths):
+                    errors.append(f"{path}: {section} file not registered in manifest: {unregistered}")
     return errors
 
 

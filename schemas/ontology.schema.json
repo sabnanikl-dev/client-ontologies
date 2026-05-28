@@ -5,6 +5,7 @@
   "description": "Generic schema for client, ontology module, and projection files. Deterministic repo validation is implemented in scripts/validate_ontology.py.",
   "oneOf": [
     {"$ref": "#/$defs/client"},
+    {"$ref": "#/$defs/ontology"},
     {"$ref": "#/$defs/module"},
     {"$ref": "#/$defs/projection"}
   ],
@@ -91,6 +92,33 @@
         "name": {"type": "string"},
         "status": {"$ref": "#/$defs/status"},
         "source_registry": {"type": "array", "items": {"$ref": "#/$defs/source"}}
+      },
+      "additionalProperties": true
+    },
+    "manifestEntry": {
+      "type": "object",
+      "required": ["path", "id"],
+      "properties": {
+        "path": {"type": "string"},
+        "id": {"$ref": "#/$defs/id"}
+      },
+      "additionalProperties": true
+    },
+    "ontology": {
+      "type": "object",
+      "description": "Per-client manifest: stable entry point listing modules and projections.",
+      "required": ["schema_version", "kind", "id", "client_id", "status", "modules", "projections"],
+      "properties": {
+        "schema_version": {"const": "0.1"},
+        "kind": {"const": "ontology"},
+        "id": {"$ref": "#/$defs/id"},
+        "client_id": {"$ref": "#/$defs/id"},
+        "status": {"$ref": "#/$defs/status"},
+        "modules": {"type": "array", "items": {"$ref": "#/$defs/manifestEntry"}},
+        "projections": {"type": "array", "items": {"$ref": "#/$defs/manifestEntry"}},
+        "handoff_outputs": {"type": "array"},
+        "templates": {"type": "array"},
+        "notes": {"type": "string"}
       },
       "additionalProperties": true
     },
