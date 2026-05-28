@@ -14,8 +14,10 @@ Implemented v0.1 foundation:
 - `docs/spec.md` — Client Operating Ontology Spec v0.1.
 - `docs/conventions.md` — ID, status, confidence, source, module, and approval conventions.
 - `docs/examples.md` — concrete lookup examples for agents and scripts.
-- `clients/femme-events/` — Femme Events client, modules, and projections.
-- `clients/jmd-menswear/` — JMD Menswear client, modules, and projections.
+- `clients/femme-events/` — Femme Events manifest (`ontology.yaml`), client, modules, and projections.
+- `clients/jmd-menswear/` — JMD Menswear manifest (`ontology.yaml`), client, modules, and projections.
+
+Each client folder has an `ontology.yaml` **manifest** — the stable entry point that lists the client's modules and projections (with their IDs) and is what agents/scripts should load first.
 
 ## Design principles
 
@@ -41,6 +43,7 @@ client-ontologies/
     export_sqlite.py
   clients/
     femme-events/
+      ontology.yaml        # manifest: entry point listing modules + projections
       client.yaml
       modules/
         brand.yaml
@@ -52,6 +55,7 @@ client-ontologies/
         website-build.yaml
         local-seo.yaml
     jmd-menswear/
+      ontology.yaml        # manifest: entry point listing modules + projections
       client.yaml
       modules/
         brand.yaml
@@ -76,7 +80,8 @@ Use this order for future client ontology work:
 6. Mark every fact as `verified`, `owner_reviewed`, `inferred`, `draft`, or `unknown`.
 7. Add evidence for every active/approved public-facing fact, rule, and relationship.
 8. Add projections only after canonical modules validate.
-9. Export runtime SQLite only after canonical YAML validation passes.
+9. Add or update the client's `ontology.yaml` manifest so every module and projection file is registered with its ID.
+10. Export runtime SQLite only after canonical YAML validation passes.
 
 ## Validate
 
@@ -92,6 +97,7 @@ The validator checks:
 - Required fields exist for clients, modules, and projections.
 - IDs are stable, lowercase, and namespaced.
 - Duplicate ontology object IDs are rejected.
+- Every client directory has an `ontology.yaml` manifest, and each manifest resolves: every listed module/projection path exists, declared IDs match the loaded file IDs, each entry references the expected kind (`modules` → `ontology_module`, `projections` → `projection`) and the manifest's own `client_id`, no path escapes the client directory, and no module/projection file is left unregistered.
 - Module references, entity references, rule references, and projection references resolve where practical.
 - Verified/active/approved facts and rules have evidence.
 - Evidence `source_id` references point to local source registries.
@@ -125,7 +131,13 @@ sqlite3 build/client-ontologies.sqlite \
 
 ## How agents should consume projections
 
-Agents should prefer projections over loading entire client folders:
+Load the client manifest first, then a projection — never scan the whole client folder:
+
+1. Load `clients/<client>/ontology.yaml` to discover the available modules and projections (and their IDs).
+2. Pick the projection that fits the task and load it.
+3. Read only the listed modules/entities/rules unless the task requires deeper context.
+
+Projection entry points:
 
 - General context: `clients/<client>/projections/agent-context.yaml`
 - Website work: `clients/<client>/projections/website-build.yaml`
