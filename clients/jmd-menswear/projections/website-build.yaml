@@ -1,0 +1,32 @@
+schema_version: "0.1"
+kind: projection
+client_id: jmd-menswear
+status: active
+evidence_sources:
+  - id: jmd-projection-sources
+    type: git_repo_file
+    path: "clients/jmd-menswear"
+    description: "Canonical JMD Menswear ontology modules in this repository."
+id: jmd-menswear.website-build
+projection_target:
+  type: github_repo
+  repo: sabnanikl-dev/jmd-6-holding-page-harness
+  local_paths:
+    - "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website"
+includes:
+  modules: [jmd-menswear.brand, jmd-menswear.website, jmd-menswear.operations]
+  entities:
+    - jmd-menswear.brand.identity
+    - jmd-menswear.brand.differentiator
+    - jmd-menswear.website.site
+    - jmd-menswear.website.showroom-card
+    - jmd-menswear.website.garment-category
+    - jmd-menswear.operations.approval-boundary
+  rules:
+    - jmd-menswear.brand.no-ai-slop
+    - jmd-menswear.website.showroom-not-ecommerce
+    - jmd-menswear.website.no-live-changes-without-approval
+    - jmd-menswear.operations.cross-review-before-merge
+outputs:
+  format: yaml
+  note: "Projection for holding-page/website builders and reviewers."

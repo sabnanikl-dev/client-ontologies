@@ -1,0 +1,124 @@
+schema_version: "0.1"
+kind: ontology_module
+id: femme-events.local-visibility
+title: "Femme Events Local Visibility Ontology"
+client_id: femme-events
+status: owner_reviewed_internal
+workstreams: [local_visibility]
+evidence_sources:
+  - id: femme-local-seo-sot
+    type: local_project_doc
+    path: "/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md"
+    description: "Owner-reviewed local SEO source of truth with NAP, service areas, GBP baseline, and guardrails."
+entities:
+  - id: femme-events.visibility.business-fact
+    label: "Femme Events business fact"
+    entity_type: governance_object
+    status: owner_reviewed_internal
+    source_confidence: owner_reviewed
+    public_facing: true
+    workstreams: [local_visibility]
+    description: "Canonical planning fact for public local visibility artifacts."
+    fields:
+      business_name: "Femme Events"
+      phone: "(678) 644-5257"
+      public_email: "Amanda@FemmeEvents.com"
+      website: "https://femmeevents.com"
+      primary_category: "Wedding service"
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "44-57,121-148"
+  - id: femme-events.visibility.service-area
+    label: "Femme Events service area"
+    entity_type: business_object
+    status: owner_reviewed_internal
+    source_confidence: owner_reviewed
+    public_facing: true
+    workstreams: [local_visibility]
+    description: "Service-area posture for Metro Atlanta and surrounding suburbs; no public storefront address."
+    fields:
+      public_address_posture: "service-area business / customer-location-only"
+      primary_service_area: "Metro Atlanta area and surrounding suburbs"
+      no_public_storefront: true
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "59-89"
+  - id: femme-events.visibility.google-business-profile
+    label: "Femme Events Google Business Profile"
+    entity_type: system_resource
+    status: owner_reviewed_internal
+    source_confidence: owner_reviewed
+    public_facing: true
+    workstreams: [local_visibility]
+    description: "Femme Events Google Business Profile baseline observed through read-only access."
+    fields:
+      title: "Femme Events"
+      maps_url: "https://maps.google.com/maps?cid=3452859708614920858"
+      primary_category: "Wedding service"
+      mutation_policy: approval_required
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "121-155"
+  - id: femme-events.visibility.review-request
+    label: "Femme Events review request"
+    entity_type: work_product
+    status: active
+    source_confidence: owner_reviewed
+    public_facing: true
+    workstreams: [local_visibility]
+    description: "Review request/reply drafting is allowed, but humans decide who to ask and approve/send."
+    fields:
+      ai_may_draft: true
+      human_sends: true
+      prohibited: [fake_reviews, ai_written_customer_reviews, review_gating, pressure_or_misleading_incentives]
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "348-358"
+relationships:
+  - id: femme-events.visibility.gbp-uses-business-fact
+    subject: femme-events.visibility.google-business-profile
+    predicate: uses
+    object: femme-events.visibility.business-fact
+    source_confidence: owner_reviewed
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "121-155"
+  - id: femme-events.visibility.business-fact-targets-service-area
+    subject: femme-events.visibility.business-fact
+    predicate: targets
+    object: femme-events.visibility.service-area
+    source_confidence: owner_reviewed
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "59-89"
+rules:
+  - id: femme-events.visibility.no-public-address-without-approval
+    title: "Do not publish a street address without explicit approval"
+    status: active
+    severity: blocking
+    rule_type: prohibited_claim
+    statement: "Femme Events should remain service-area/no public storefront unless Amanda or Karan explicitly approve a public address later."
+    source_confidence: owner_reviewed
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "59-89"
+  - id: femme-events.visibility.public-account-mutations-require-approval
+    title: "Public visibility account mutations require approval"
+    status: active
+    severity: approval_required
+    rule_type: approval_required
+    statement: "GBP, directory, review, social, paid listing, and public-account changes require explicit approval for the exact mutation."
+    source_confidence: owner_reviewed
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "34-42,403-414"
+  - id: femme-events.visibility.disallow-unverified-seo-claims
+    title: "Disallow unverified SEO/ranking/social proof claims"
+    status: active
+    severity: blocking
+    rule_type: prohibited_claim
+    statement: "Do not claim top-rated, award-winning, #1, preferred vendor, specific review count, venue expertise, or similar unless verified and approved."
+    source_confidence: owner_reviewed
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "329-347"

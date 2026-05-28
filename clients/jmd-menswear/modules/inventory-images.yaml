@@ -1,0 +1,176 @@
+schema_version: "0.1"
+kind: ontology_module
+id: jmd-menswear.inventory-images
+title: "JMD Inventory Images and Showroom Workflow Ontology"
+client_id: jmd-menswear
+status: draft
+workstreams: [inventory_images, website]
+evidence_sources:
+  - id: jmd-inventory-plan
+    type: local_project_doc
+    path: "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/docs/research/inventory-backend-automation-plan.md"
+    description: "Draft Drive intake, Sanity, ledger, state machine, and safe copy plan."
+entities:
+  - id: jmd-menswear.inventory.drive-folder
+    label: "JMD Drive intake folder"
+    entity_type: system_resource
+    status: proposed
+    source_confidence: draft
+    public_facing: false
+    workstreams: [inventory_images]
+    description: "Google Drive folder structure for owner image intake and status organization."
+    fields:
+      folders: ["01_New_Drops", "02_Ready_For_Site", "03_Imported_To_Backend", "04_Published", "05_Archived_Or_Sold", "_Needs_Review"]
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "184-202"
+  - id: jmd-menswear.inventory.image
+    label: "JMD inventory image"
+    entity_type: media_asset
+    status: draft
+    source_confidence: draft
+    public_facing: true
+    workstreams: [inventory_images, website]
+    description: "Image uploaded for possible use in the JMD showroom workflow after review."
+    fields:
+      supported_types: [jpg, jpeg, png, heic]
+      raw_upload_public: false
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "238-272"
+  - id: jmd-menswear.inventory.approval-ledger-entry
+    label: "JMD approval ledger entry"
+    entity_type: workflow_artifact
+    status: proposed
+    source_confidence: draft
+    public_facing: false
+    workstreams: [inventory_images]
+    description: "Record of Drive file ID, dates, approval, import, publish/archive state, notes, and errors."
+    fields:
+      candidate_systems: [Google_Sheet, Sanity_Studio]
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "10-18,523-539"
+  - id: jmd-menswear.inventory.sanity-asset
+    label: "JMD Sanity asset"
+    entity_type: media_asset
+    status: proposed
+    source_confidence: draft
+    public_facing: true
+    workstreams: [inventory_images, website]
+    description: "Sanity image asset for website delivery after approval/import."
+    fields:
+      backend_role: "website image asset/CDN"
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "10-18,30-52,406-418"
+  - id: jmd-menswear.inventory.showroom-item
+    label: "JMD showroom item"
+    entity_type: content_record
+    status: proposed
+    source_confidence: draft
+    public_facing: true
+    workstreams: [inventory_images, website]
+    description: "Sanity document representing a visual showroom highlight; not a product checkout record."
+    fields:
+      candidate_names: [showroomItem, inventoryLook]
+      status_enum: [intake, ready, scheduled, published, archived, sold, rejected]
+      default_publish_delay_days: 2
+      default_display_window_days: 14
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "204-237,447-457"
+  - id: jmd-menswear.inventory.sync-run
+    label: "JMD inventory sync run"
+    entity_type: workflow_artifact
+    status: proposed
+    source_confidence: draft
+    public_facing: false
+    workstreams: [inventory_images]
+    description: "A deterministic reconciliation execution and summary for intake/import/publish/archive jobs."
+    fields:
+      runner_options: [Vercel_Cron, GitHub_Actions, Google_Apps_Script]
+      dry_run_required_for_live_tests: true
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "312-368,541-596"
+relationships:
+  - id: jmd-menswear.inventory.drive-folder-contains-image
+    subject: jmd-menswear.inventory.drive-folder
+    predicate: contains
+    object: jmd-menswear.inventory.image
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "184-202"
+  - id: jmd-menswear.inventory.image-creates-sanity-asset
+    subject: jmd-menswear.inventory.image
+    predicate: creates_or_updates
+    object: jmd-menswear.inventory.sanity-asset
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "406-418"
+  - id: jmd-menswear.inventory.sanity-asset-renders-in-showroom-item
+    subject: jmd-menswear.inventory.sanity-asset
+    predicate: renders_in
+    object: jmd-menswear.inventory.showroom-item
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "204-237,406-418"
+  - id: jmd-menswear.inventory.sync-run-updates-ledger
+    subject: jmd-menswear.inventory.sync-run
+    predicate: creates_or_updates
+    object: jmd-menswear.inventory.approval-ledger-entry
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "238-272,541-596"
+rules:
+  - id: jmd-menswear.inventory.raw-uploads-do-not-publish
+    title: "Raw uploads do not publish directly"
+    status: active
+    severity: blocking
+    rule_type: status_transition
+    statement: "Images in raw intake must not publish directly to the public website; approval/review is required first."
+    source_confidence: verified
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "184-202,238-272,852-863"
+  - id: jmd-menswear.inventory.website-reads-sanity-not-drive
+    title: "Website should read Sanity or approved backend, not raw Drive"
+    status: proposed
+    severity: blocking
+    rule_type: implementation_constraint
+    statement: "The public website should read approved showroom records/assets from Sanity or another approved backend/CDN, not directly from Google Drive."
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "10-18,53-72,166-182"
+  - id: jmd-menswear.inventory.human-approval-required-for-mvp
+    title: "Human approval required for MVP image publishing"
+    status: proposed
+    severity: approval_required
+    rule_type: approval_required
+    statement: "MVP inventory image publishing requires human approval before scheduling or publishing public content."
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "196-202,447-457"
+state_machines:
+  - id: jmd-menswear.inventory.image-lifecycle
+    entity: jmd-menswear.inventory.image
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "238-310"
+    states:
+      raw_uploaded: {public: false, next: [needs_review, rejected]}
+      needs_review: {public: false, next: [approved, rejected]}
+      approved: {public: false, next: [scheduled, archived]}
+      scheduled: {public: false, next: [published, archived]}
+      published: {public: true, next: [archived, sold]}
+      archived: {public: false, next: [approved]}
+      rejected: {public: false, next: []}
+      error: {public: false, next: [needs_review]}

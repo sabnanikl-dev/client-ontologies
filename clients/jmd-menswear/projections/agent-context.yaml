@@ -1,0 +1,32 @@
+schema_version: "0.1"
+kind: projection
+client_id: jmd-menswear
+status: active
+evidence_sources:
+  - id: jmd-projection-sources
+    type: git_repo_file
+    path: "clients/jmd-menswear"
+    description: "Canonical JMD Menswear ontology modules in this repository."
+id: jmd-menswear.agent-context
+projection_target:
+  type: skill_reference
+  consumer: generic_agent
+  visibility: internal
+includes:
+  modules: [jmd-menswear.brand, jmd-menswear.website, jmd-menswear.inventory-images, jmd-menswear.operations]
+  entities:
+    - jmd-menswear.brand.identity
+    - jmd-menswear.brand.differentiator
+    - jmd-menswear.website.site
+    - jmd-menswear.website.showroom-card
+    - jmd-menswear.inventory.image
+    - jmd-menswear.inventory.showroom-item
+    - jmd-menswear.operations.approval-boundary
+  rules:
+    - jmd-menswear.brand.no-ai-slop
+    - jmd-menswear.website.showroom-not-ecommerce
+    - jmd-menswear.inventory.raw-uploads-do-not-publish
+    - jmd-menswear.operations.no-live-account-or-deploy-without-approval
+outputs:
+  format: yaml
+  note: "Use as compact context for future JMD agents before website, copy, or inventory workflow work."

@@ -1,0 +1,105 @@
+schema_version: "0.1"
+kind: ontology_module
+id: femme-events.brand
+title: "Femme Events Brand Ontology"
+client_id: femme-events
+status: active
+workstreams: [brand, website, local_visibility]
+evidence_sources:
+  - id: femme-brand-guide
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Brand Guide.md"
+    description: "Brand guide with identity, color palette, and voice."
+  - id: femme-overview
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Overview.md"
+    description: "Overview with positioning, market, assets, and website."
+entities:
+  - id: femme-events.brand.identity
+    label: "Femme Events identity"
+    entity_type: brand_object
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [brand]
+    description: "Wedding coordination and partial planning brand serving Metro Atlanta couples."
+    fields:
+      business_type: "Wedding coordination + partial planning"
+      market: "Metro Atlanta wedding coordination/design"
+      positioning: "Affordable luxury for couples in the market's hollow middle"
+      instagram: "@_femmeevents"
+    evidence:
+      - source_id: femme-overview
+        lines: "12-20"
+  - id: femme-events.brand.voice
+    label: "Femme Events brand voice"
+    entity_type: brand_object
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [brand, website]
+    description: "Warm, creative, professional brand voice; soft/coquette but still organized and credible."
+    fields:
+      adjectives: [warm, creative, professional, polished, personal, punchy, sophisticated]
+      avoid: [corporate, overly_casual, braggy, generic_luxury]
+      principles: [relationships_over_transactions, industry_credibility_matters]
+    evidence:
+      - source_id: femme-brand-guide
+        lines: "37-42"
+  - id: femme-events.brand.visual-tokens
+    label: "Femme Events visual design tokens"
+    entity_type: brand_object
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [brand, website]
+    description: "Thirteen-color soft/coquette palette used by Femme Events brand assets."
+    fields:
+      colors:
+        dusty_rose: "#ddadbc"
+        mauve: "#bd708c"
+        deep_plum: "#7f165b"
+        baby_pink: "#efd5e1"
+        cream: "#fdf8ea"
+        sage: "#6f7961"
+        dark_eggplant: "#3f0d2a"
+        carnation_pink: "#ffd7e1"
+        burnt_orange: "#b45100"
+        peach_pink: "#ffcccc"
+        orchid: "#e7abd6"
+        white: "#ffffff"
+        chocolate_brown: "#6a4c28"
+    evidence:
+      - source_id: femme-brand-guide
+        lines: "20-35"
+relationships:
+  - id: femme-events.brand.identity-uses-voice
+    subject: femme-events.brand.identity
+    predicate: uses
+    object: femme-events.brand.voice
+    source_confidence: verified
+    evidence:
+      - source_id: femme-brand-guide
+        lines: "37-42"
+  - id: femme-events.brand.identity-uses-visual-tokens
+    subject: femme-events.brand.identity
+    predicate: uses
+    object: femme-events.brand.visual-tokens
+    source_confidence: verified
+    evidence:
+      - source_id: femme-brand-guide
+        lines: "20-35"
+rules:
+  - id: femme-events.brand.no-corporate-tone
+    title: "Avoid corporate or generic luxury voice"
+    status: active
+    severity: warning
+    rule_type: content_voice
+    statement: "Femme Events copy should stay warm, creative, polished, and personal; avoid corporate, overly casual, braggy, or generic luxury-planner language."
+    source_confidence: verified
+    machine_check:
+      type: disallowed_terms
+      disallowed_terms: ["world-class", "synergy", "best-in-class", "luxury firm"]
+    evidence:
+      - source_id: femme-brand-guide
+        lines: "37-42"

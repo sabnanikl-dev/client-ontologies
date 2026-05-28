@@ -1,0 +1,32 @@
+schema_version: "0.1"
+kind: projection
+client_id: femme-events
+status: active
+evidence_sources:
+  - id: femme-projection-sources
+    type: git_repo_file
+    path: "clients/femme-events"
+    description: "Canonical Femme Events ontology modules in this repository."
+id: femme-events.agent-context
+projection_target:
+  type: skill_reference
+  consumer: generic_agent
+  visibility: internal
+includes:
+  modules: [femme-events.brand, femme-events.website, femme-events.local-visibility, femme-events.operations]
+  entities:
+    - femme-events.brand.identity
+    - femme-events.brand.voice
+    - femme-events.brand.visual-tokens
+    - femme-events.website.site
+    - femme-events.website.service-package
+    - femme-events.visibility.business-fact
+    - femme-events.operations.approval-boundary
+  rules:
+    - femme-events.brand.no-corporate-tone
+    - femme-events.website.public-claims-require-evidence
+    - femme-events.visibility.public-account-mutations-require-approval
+    - femme-events.operations.no-client-facing-send-without-approval
+outputs:
+  format: yaml
+  note: "Use as compact context for future agents before drafting Femme website, visibility, or operations work."

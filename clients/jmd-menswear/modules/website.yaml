@@ -1,0 +1,108 @@
+schema_version: "0.1"
+kind: ontology_module
+id: jmd-menswear.website
+title: "JMD Menswear Website Ontology"
+client_id: jmd-menswear
+status: active
+workstreams: [website]
+evidence_sources:
+  - id: jmd-client-note
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/consultancy/clients/JMD/Client JMD Menswear.md"
+    description: "Website/domain context and e-commerce constraints."
+  - id: jmd-harness-readme
+    type: git_repo_file
+    path: "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/README.md"
+    description: "Holding page harness purpose and target repo."
+  - id: jmd-inventory-plan
+    type: local_project_doc
+    path: "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/docs/research/inventory-backend-automation-plan.md"
+    description: "Showroom-not-ecommerce website direction and safe copy."
+entities:
+  - id: jmd-menswear.website.site
+    label: "JMD Menswear website"
+    entity_type: system_resource
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [website]
+    description: "Public JMD website/holding-page workstream for jmdmenswear.com."
+    fields:
+      domain: "jmdmenswear.com"
+      current_context: "Holding page harness; target repo sabnanikl-dev/jmd-6-holding-page-harness"
+      ecommerce_status: deferred
+    evidence:
+      - source_id: jmd-client-note
+        lines: "15-20,62-79"
+      - source_id: jmd-harness-readme
+        lines: "1-15,26-32"
+  - id: jmd-menswear.website.showroom-card
+    label: "JMD showroom card"
+    entity_type: work_product
+    status: proposed
+    source_confidence: draft
+    public_facing: true
+    workstreams: [website, inventory_images]
+    description: "A website card representing recent showroom highlights, not a purchasable product/SKU."
+    fields:
+      preferred_section_copy: ["Recently on the floor", "Limited pieces change often", "Call or visit to check what is available today"]
+      max_visible_items: "6-9 proposed for MVP"
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "20-27,204-237,447-457"
+  - id: jmd-menswear.website.garment-category
+    label: "JMD garment category"
+    entity_type: business_object
+    status: proposed
+    source_confidence: draft
+    public_facing: true
+    workstreams: [website, inventory_images]
+    description: "A safe category for showroom content; exact product/stock guarantees are out of scope."
+    fields:
+      draft_categories: [suit, tuxedo, jacket, shirt, shoes, accessories, rental_look, other]
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "204-231"
+relationships:
+  - id: jmd-menswear.website.site-contains-showroom-card
+    subject: jmd-menswear.website.site
+    predicate: contains
+    object: jmd-menswear.website.showroom-card
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "166-182,380-392"
+  - id: jmd-menswear.website.showroom-card-uses-garment-category
+    subject: jmd-menswear.website.showroom-card
+    predicate: uses
+    object: jmd-menswear.website.garment-category
+    source_confidence: draft
+    evidence:
+      - source_id: jmd-inventory-plan
+        lines: "204-231"
+rules:
+  - id: jmd-menswear.website.showroom-not-ecommerce
+    title: "Website is a showroom, not e-commerce"
+    status: active
+    severity: blocking
+    rule_type: prohibited_claim
+    statement: "JMD website content must frame inventory as showroom highlights, not live e-commerce inventory, checkout, cart, quantities, or guaranteed availability."
+    source_confidence: verified
+    machine_check:
+      type: disallowed_terms
+      disallowed_terms: ["add to cart", "buy online", "in stock", "only 1 left", "available now", "checkout"]
+    evidence:
+      - source_id: jmd-client-note
+        lines: "51-54"
+      - source_id: jmd-inventory-plan
+        lines: "20-27,233-237"
+  - id: jmd-menswear.website.no-live-changes-without-approval
+    title: "No deploy/DNS/hosting changes without approval"
+    status: active
+    severity: approval_required
+    rule_type: approval_required
+    statement: "Do not deploy, touch DNS/HostGator/GoDaddy/Vercel, or change public hosting without explicit Karan approval."
+    source_confidence: verified
+    evidence:
+      - source_id: jmd-harness-readme
+        lines: "17-24"

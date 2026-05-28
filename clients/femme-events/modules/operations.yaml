@@ -1,0 +1,78 @@
+schema_version: "0.1"
+kind: ontology_module
+id: femme-events.operations
+title: "Femme Events Operations and Approval Ontology"
+client_id: femme-events
+status: active
+workstreams: [operations, website, local_visibility]
+evidence_sources:
+  - id: femme-local-seo-sot
+    type: local_project_doc
+    path: "/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md"
+    description: "Approval status, mutation guardrails, and remaining required inputs."
+  - id: femme-visibility-agents
+    type: git_repo_file
+    path: "/Users/creator/projects/femme-events/visibility/Femme-visibility/AGENTS.md"
+    description: "Visibility repo operating principles and approval boundaries."
+entities:
+  - id: femme-events.operations.approval-boundary
+    label: "Femme Events approval boundary"
+    entity_type: governance_object
+    status: active
+    source_confidence: verified
+    public_facing: false
+    workstreams: [operations]
+    description: "Draft/reconcile/recommend is allowed; public mutations require explicit approval."
+    fields:
+      draft_allowed_without_approval: true
+      public_or_live_allowed_without_approval: false
+      applies_to: [website, google_business_profile, directories, reviews, social, dns, paid_accounts]
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "34-42,403-414"
+      - source_id: femme-visibility-agents
+        lines: "50-69"
+  - id: femme-events.operations.photo-proof-inventory
+    label: "Femme Events photo/proof inventory"
+    entity_type: workflow_artifact
+    status: proposed
+    source_confidence: owner_reviewed
+    public_facing: false
+    workstreams: [operations, local_visibility, website]
+    description: "Metadata needed before reusing images beyond already-live website context."
+    fields:
+      required_metadata: [file_name_or_path, what_it_shows, permission_status, photographer_credit, venue_vendor_credits, client_privacy_constraints, approved_channels, suggested_alt_text]
+      current_status: "candidate assets exist; permissions/credits/channel rights need review before GBP/directory reuse"
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "359-381"
+relationships:
+  - id: femme-events.operations.photo-proof-governs-visibility-assets
+    subject: femme-events.operations.photo-proof-inventory
+    predicate: governed_by
+    object: femme-events.operations.approval-boundary
+    source_confidence: owner_reviewed
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "359-381"
+rules:
+  - id: femme-events.operations.draft-before-public-use
+    title: "Draft artifacts are not authorization for public use"
+    status: active
+    severity: approval_required
+    rule_type: approval_required
+    statement: "Owner-reviewed internal artifacts may support planning and drafts, but public profile/listing/website/social mutations still need explicit approval."
+    source_confidence: owner_reviewed
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "20-42"
+  - id: femme-events.operations.no-client-facing-send-without-approval
+    title: "No client-facing send/publish without approval"
+    status: active
+    severity: blocking
+    rule_type: approval_required
+    statement: "Do not send review requests, outreach, LocalPosts, social posts, or other client/customer-facing messages without human approval."
+    source_confidence: verified
+    evidence:
+      - source_id: femme-visibility-agents
+        lines: "50-69"

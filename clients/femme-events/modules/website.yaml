@@ -1,0 +1,131 @@
+schema_version: "0.1"
+kind: ontology_module
+id: femme-events.website
+title: "Femme Events Website Ontology"
+client_id: femme-events
+status: active
+workstreams: [website]
+evidence_sources:
+  - id: femme-overview
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Overview.md"
+    description: "Website domain, repo path, and site context."
+  - id: femme-website-readme
+    type: git_repo_file
+    path: "/Users/creator/projects/Femme-Events-Website/README.md"
+    description: "Website README with stack, Sanity, Formspree, and repo layout."
+  - id: femme-local-seo-sot
+    type: local_project_doc
+    path: "/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md"
+    description: "Owner-reviewed source for package names, URLs, visible public facts, and SEO baseline."
+entities:
+  - id: femme-events.website.site
+    label: "Femme Events website"
+    entity_type: system_resource
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [website]
+    description: "Public marketing website for Femme Events at the canonical apex domain."
+    fields:
+      canonical_url: "https://femmeevents.com"
+      www_behavior: "www should redirect to apex"
+      github_repo: "sabnanikl-dev/Femme-Events-Website"
+      stack: [React, TypeScript, Vite, Tailwind, React_Router, Sanity, Formspree]
+    evidence:
+      - source_id: femme-overview
+        lines: "37-46"
+      - source_id: femme-website-readme
+        lines: "1-15"
+  - id: femme-events.website.service-package
+    label: "Femme Events service package"
+    entity_type: business_object
+    status: approved
+    source_confidence: owner_reviewed
+    public_facing: true
+    workstreams: [website, local_visibility]
+    description: "Current public package naming for Femme Events services."
+    fields:
+      live_package_names: ["In Your Corner", "Getting It Together", "The Full Femme"]
+      historical_internal: ["Just Show Up"]
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "157-188"
+  - id: femme-events.website.inquiry-form
+    label: "Femme Events inquiry form"
+    entity_type: work_product
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [website]
+    description: "Website inquiry form routed through Formspree; customer-facing URL is the website anchor, not the raw processor endpoint."
+    fields:
+      canonical_inquiry_url: "https://femmeevents.com/#inquiry-form"
+      service_prefill_pattern: "https://femmeevents.com/?service={service-slug}#inquiry-form"
+      processor_visibility: internal_only
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "91-105"
+      - source_id: femme-website-readme
+        lines: "14-15"
+  - id: femme-events.website.cms-content
+    label: "Femme Events CMS content"
+    entity_type: content_record
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [website]
+    description: "Journal/blog, testimonials, and vendor content served from Sanity CMS with static fallbacks."
+    fields:
+      cms: Sanity
+      fallback: static_fallbacks
+      content_types: [journal, testimonials, vendors]
+    evidence:
+      - source_id: femme-website-readme
+        lines: "3-15"
+relationships:
+  - id: femme-events.website.site-contains-service-package
+    subject: femme-events.website.site
+    predicate: contains
+    object: femme-events.website.service-package
+    source_confidence: verified
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "177-188"
+  - id: femme-events.website.site-targets-inquiry-form
+    subject: femme-events.website.site
+    predicate: targets
+    object: femme-events.website.inquiry-form
+    source_confidence: verified
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "91-105"
+  - id: femme-events.website.cms-content-renders-in-site
+    subject: femme-events.website.cms-content
+    predicate: renders_in
+    object: femme-events.website.site
+    source_confidence: verified
+    evidence:
+      - source_id: femme-website-readme
+        lines: "3-15"
+rules:
+  - id: femme-events.website.public-claims-require-evidence
+    title: "Public website claims require evidence or approval"
+    status: active
+    severity: approval_required
+    rule_type: evidence_required
+    statement: "Public website claims about services, pricing, review counts, rankings, venue relationships, photos, and policies must be source-backed or explicitly approved before use."
+    source_confidence: owner_reviewed
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "286-347"
+  - id: femme-events.website.keep-formspree-endpoint-internal
+    title: "Do not publish raw Formspree endpoint as a customer URL"
+    status: active
+    severity: warning
+    rule_type: private_implementation_detail
+    statement: "Use the website inquiry anchor as the public URL; keep the raw form processor endpoint as an internal implementation detail."
+    source_confidence: verified
+    evidence:
+      - source_id: femme-local-seo-sot
+        lines: "91-97"

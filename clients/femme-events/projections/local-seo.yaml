@@ -1,0 +1,32 @@
+schema_version: "0.1"
+kind: projection
+client_id: femme-events
+status: active
+evidence_sources:
+  - id: femme-projection-sources
+    type: git_repo_file
+    path: "clients/femme-events"
+    description: "Canonical Femme Events ontology modules in this repository."
+id: femme-events.local-seo
+projection_target:
+  type: local_repo
+  repo: sabnanikl-dev/Femme-visibility
+  local_paths:
+    - "/Users/creator/projects/femme-events/visibility/Femme-visibility"
+includes:
+  modules: [femme-events.local-visibility, femme-events.operations, femme-events.website, femme-events.brand]
+  entities:
+    - femme-events.visibility.business-fact
+    - femme-events.visibility.service-area
+    - femme-events.visibility.google-business-profile
+    - femme-events.visibility.review-request
+    - femme-events.website.inquiry-form
+    - femme-events.operations.photo-proof-inventory
+  rules:
+    - femme-events.visibility.no-public-address-without-approval
+    - femme-events.visibility.public-account-mutations-require-approval
+    - femme-events.visibility.disallow-unverified-seo-claims
+    - femme-events.operations.no-client-facing-send-without-approval
+outputs:
+  format: yaml
+  note: "Projection for local SEO/citation/review work. Public mutations remain approval-gated."

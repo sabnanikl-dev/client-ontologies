@@ -1,0 +1,34 @@
+schema_version: "0.1"
+kind: projection
+client_id: jmd-menswear
+status: active
+evidence_sources:
+  - id: jmd-projection-sources
+    type: git_repo_file
+    path: "clients/jmd-menswear"
+    description: "Canonical JMD Menswear ontology modules in this repository."
+id: jmd-menswear.inventory-workflow
+projection_target:
+  type: automation_workflow
+  target_ref: jmd-drive-to-sanity-showroom
+  visibility: internal
+includes:
+  modules: [jmd-menswear.inventory-images, jmd-menswear.website, jmd-menswear.operations]
+  entities:
+    - jmd-menswear.inventory.drive-folder
+    - jmd-menswear.inventory.image
+    - jmd-menswear.inventory.approval-ledger-entry
+    - jmd-menswear.inventory.sanity-asset
+    - jmd-menswear.inventory.showroom-item
+    - jmd-menswear.inventory.sync-run
+    - jmd-menswear.website.showroom-card
+    - jmd-menswear.operations.approval-boundary
+  rules:
+    - jmd-menswear.inventory.raw-uploads-do-not-publish
+    - jmd-menswear.inventory.website-reads-sanity-not-drive
+    - jmd-menswear.inventory.human-approval-required-for-mvp
+    - jmd-menswear.website.showroom-not-ecommerce
+    - jmd-menswear.operations.no-live-account-or-deploy-without-approval
+outputs:
+  format: yaml
+  note: "Projection for future Drive/Sanity inventory automation. YAML remains canonical; no live automation is authorized by this projection alone."

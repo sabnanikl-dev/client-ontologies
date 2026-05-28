@@ -1,0 +1,65 @@
+schema_version: "0.1"
+kind: ontology_module
+id: jmd-menswear.brand
+title: "JMD Menswear Brand Ontology"
+client_id: jmd-menswear
+status: active
+workstreams: [brand, website]
+evidence_sources:
+  - id: jmd-client-note
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/consultancy/clients/JMD/Client JMD Menswear.md"
+    description: "JMD owners, specialty, differentiation, audience/events, and constraints."
+entities:
+  - id: jmd-menswear.brand.identity
+    label: "JMD Menswear identity"
+    entity_type: brand_object
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [brand, website]
+    description: "Specialty men's formal wear store in Conyers, GA with sales and rentals."
+    fields:
+      location: "Conyers, GA"
+      specialty: "Men's formal wear — sales + rentals"
+      events: [weddings, proms, quinceaneras, everyday_formal_wear]
+      owners: [Lucky, Danny]
+    evidence:
+      - source_id: jmd-client-note
+        lines: "15-27"
+  - id: jmd-menswear.brand.differentiator
+    label: "JMD one-of-a-kind differentiator"
+    entity_type: brand_object
+    status: active
+    source_confidence: verified
+    public_facing: true
+    workstreams: [brand, website]
+    description: "One size per style / one-of-a-kind pieces; when an item is gone, it is gone."
+    fields:
+      positioning: "Hidden gem; better store experience than big box but weaker digital presence."
+      inventory_model: "Limited, one-of-a-kind pieces"
+    evidence:
+      - source_id: jmd-client-note
+        lines: "22-27"
+relationships:
+  - id: jmd-menswear.brand.identity-uses-differentiator
+    subject: jmd-menswear.brand.identity
+    predicate: uses
+    object: jmd-menswear.brand.differentiator
+    source_confidence: verified
+    evidence:
+      - source_id: jmd-client-note
+        lines: "22-27"
+rules:
+  - id: jmd-menswear.brand.no-ai-slop
+    title: "Avoid AI slop and keep content authentic"
+    status: active
+    severity: blocking
+    rule_type: content_quality
+    statement: "JMD public content must feel authentic to the store and owners; do not use generic AI-slop copy or AI/stock imagery as a substitute for real store material."
+    source_confidence: verified
+    evidence:
+      - source_id: jmd-client-note
+        lines: "51-54"
+      - source_id: jmd-client-note
+        lines: "22-27"

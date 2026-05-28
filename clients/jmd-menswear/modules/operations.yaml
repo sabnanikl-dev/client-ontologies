@@ -1,0 +1,84 @@
+schema_version: "0.1"
+kind: ontology_module
+id: jmd-menswear.operations
+title: "JMD Menswear Operations and Approval Ontology"
+client_id: jmd-menswear
+status: active
+workstreams: [operations, website, inventory_images]
+evidence_sources:
+  - id: jmd-client-note
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/consultancy/clients/JMD/Client JMD Menswear.md"
+    description: "Client constraints and operating context."
+  - id: jmd-harness-agents
+    type: git_repo_file
+    path: "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/AGENTS.md"
+    description: "Harness approval, cross-review, no-live-change, and repo-knowledge rules."
+  - id: jmd-inventory-plan
+    type: local_project_doc
+    path: "/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/docs/research/inventory-backend-automation-plan.md"
+    description: "Approval questions and draft-only no-live-change status for inventory automation."
+entities:
+  - id: jmd-menswear.operations.approval-boundary
+    label: "JMD approval boundary"
+    entity_type: governance_object
+    status: active
+    source_confidence: verified
+    public_facing: false
+    workstreams: [operations]
+    description: "Human approval gates for live changes, public copy, deployment, DNS/hosting, and inventory automation."
+    fields:
+      draft_allowed_without_approval: true
+      live_or_public_mutation_allowed_without_approval: false
+      applies_to: [deploys, DNS, HostGator, GoDaddy, Vercel, public_copy, inventory_publish, account_mutations]
+    evidence:
+      - source_id: jmd-harness-agents
+        lines: "14-20,46-51,116-123"
+      - source_id: jmd-inventory-plan
+        lines: "1-6,369-379,458-465"
+  - id: jmd-menswear.operations.owner-roles
+    label: "JMD owner roles"
+    entity_type: governance_object
+    status: active
+    source_confidence: verified
+    public_facing: false
+    workstreams: [operations]
+    description: "Lucky leads relationships/brand personality; Danny leads inventory/purchasing/day-to-day sales."
+    fields:
+      Lucky: "relationships and brand personality"
+      Danny: "inventory, purchasing, day-to-day sales"
+    evidence:
+      - source_id: jmd-client-note
+        lines: "15-20"
+relationships:
+  - id: jmd-menswear.operations.approval-boundary-governs-website
+    subject: jmd-menswear.operations.approval-boundary
+    predicate: governs
+    object: jmd-menswear.website.site
+    source_confidence: verified
+    evidence:
+      - source_id: jmd-harness-agents
+        lines: "14-20,116-123"
+rules:
+  - id: jmd-menswear.operations.no-live-account-or-deploy-without-approval
+    title: "No live account/deploy/hosting mutation without approval"
+    status: active
+    severity: blocking
+    rule_type: approval_required
+    statement: "Do not deploy, mutate DNS/hosting/accounts, or publish public JMD changes without explicit Karan approval."
+    source_confidence: verified
+    evidence:
+      - source_id: jmd-harness-agents
+        lines: "14-20,116-123"
+      - source_id: jmd-inventory-plan
+        lines: "1-6"
+  - id: jmd-menswear.operations.cross-review-before-merge
+    title: "Cross-review before merge"
+    status: active
+    severity: blocking
+    rule_type: process_constraint
+    statement: "JMD repo implementation changes require cross-review before merge; builders do not review or merge their own work."
+    source_confidence: verified
+    evidence:
+      - source_id: jmd-harness-agents
+        lines: "14-20,46-51"

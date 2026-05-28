@@ -1,0 +1,33 @@
+schema_version: "0.1"
+kind: projection
+client_id: femme-events
+status: active
+evidence_sources:
+  - id: femme-projection-sources
+    type: git_repo_file
+    path: "clients/femme-events"
+    description: "Canonical Femme Events ontology modules in this repository."
+id: femme-events.website-build
+projection_target:
+  type: github_repo
+  repo: sabnanikl-dev/Femme-Events-Website
+  local_paths:
+    - "/Users/creator/projects/Femme-Events-Website"
+includes:
+  modules: [femme-events.brand, femme-events.website, femme-events.operations]
+  entities:
+    - femme-events.brand.voice
+    - femme-events.brand.visual-tokens
+    - femme-events.website.site
+    - femme-events.website.service-package
+    - femme-events.website.inquiry-form
+    - femme-events.website.cms-content
+    - femme-events.operations.approval-boundary
+  rules:
+    - femme-events.brand.no-corporate-tone
+    - femme-events.website.public-claims-require-evidence
+    - femme-events.website.keep-formspree-endpoint-internal
+    - femme-events.operations.draft-before-public-use
+outputs:
+  format: yaml
+  note: "Projection for website builders/reviewers; YAML remains canonical and this file is a curated slice."

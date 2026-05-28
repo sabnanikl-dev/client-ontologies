@@ -1,0 +1,36 @@
+schema_version: "0.1"
+kind: client
+id: femme-events
+name: Femme Events
+status: active
+client_type: wedding_coordination_and_design
+source_registry:
+  - id: femme-overview
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Overview.md"
+    description: "Business details, website/domain, project locations, and brand asset pointers."
+  - id: femme-brand-guide
+    type: obsidian_note
+    path: "/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Brand Guide.md"
+    description: "Brand identity, palette, and voice guidance."
+  - id: femme-local-seo-sot
+    type: local_project_doc
+    path: "/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md"
+    description: "Owner-reviewed local SEO source of truth and approval guardrails."
+  - id: femme-website-readme
+    type: git_repo_file
+    path: "/Users/creator/projects/Femme-Events-Website/README.md"
+    description: "Website stack, CMS, Formspree, and repo layout."
+privacy:
+  public_handoff_allowed: true
+  contains_private_context: true
+  secret_policy: "No credentials, OAuth tokens, raw client exports, private address data, API tokens, or payment details."
+workstreams:
+  - id: brand
+    status: active
+  - id: website
+    status: active
+  - id: local_visibility
+    status: owner_reviewed_internal
+  - id: operations
+    status: active
