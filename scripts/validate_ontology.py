@@ -37,6 +37,147 @@ REQUIRED = {
     "projection": {"schema_version", "kind", "id", "client_id", "status", "projection_target", "includes", "evidence_sources"},
 }
 
+# Each kind dispatches to its own JSON Schema file. The schema layer enforces
+# shape (types, enums, required identity fields, no unknown fields); repo-specific
+# cross-reference and conditional-evidence rules live in validate() below.
+KIND_SCHEMA = {
+    "client": "https://papi.ai/schemas/client.schema.json",
+    "ontology_module": "https://papi.ai/schemas/module.schema.json",
+    "projection": "https://papi.ai/schemas/projection.schema.json",
+}
+
+
+SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
+
+
+def load_schema_registry(schema_dir: Path = SCHEMA_DIR) -> dict[str, dict]:
+    """Load every schemas/*.schema.json keyed by its $id for $ref resolution.
+
+    Schemas are colocated with the validator (not the data root) so a subtree or
+    fixture root can still be validated against the canonical contract.
+    """
+    registry: dict[str, dict] = {}
+    for path in sorted(schema_dir.glob("*.schema.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        sid = data.get("$id")
+        if sid:
+            registry[sid] = data
+    return registry
+
+
+def _matches_type(instance: Any, type_spec: Any) -> bool:
+    types = type_spec if isinstance(type_spec, list) else [type_spec]
+    for t in types:
+        if t == "object" and isinstance(instance, dict):
+            return True
+        if t == "array" and isinstance(instance, list):
+            return True
+        if t == "string" and isinstance(instance, str):
+            return True
+        if t == "boolean" and isinstance(instance, bool):
+            return True
+        if t == "integer" and isinstance(instance, int) and not isinstance(instance, bool):
+            return True
+        if t == "number" and isinstance(instance, (int, float)) and not isinstance(instance, bool):
+            return True
+        if t == "null" and instance is None:
+            return True
+    return False
+
+
+def _resolve_ref(ref: str, registry: dict[str, dict], root: dict) -> tuple[dict, dict]:
+    """Resolve a $ref to (subschema, owning-document). Local '#/...' refs stay in
+    the current document; absolute '<$id>#/...' refs jump to a registered schema."""
+    base, _, fragment = ref.partition("#")
+    target_root = registry[base] if base else root
+    node: Any = target_root
+    for part in fragment.split("/"):
+        if not part:
+            continue
+        part = part.replace("~1", "/").replace("~0", "~")
+        node = node[part]
+    return node, target_root
+
+
+def _check_schema(instance: Any, schema: dict, registry: dict[str, dict], root: dict, path: str, errors: list[str]) -> None:
+    """Minimal JSON Schema (draft 2020-12 subset) validator: enough for the
+    keywords used by schemas/. Keeps validation dependency-free like parse_yaml."""
+    if "$ref" in schema:
+        target, target_root = _resolve_ref(schema["$ref"], registry, root)
+        _check_schema(instance, target, registry, target_root, path, errors)
+        return
+    where = path or "<root>"
+    if "type" in schema and not _matches_type(instance, schema["type"]):
+        errors.append(f"{where}: expected type {schema['type']}, got {type(instance).__name__}")
+        return
+    if "const" in schema and instance != schema["const"]:
+        errors.append(f"{where}: expected const {schema['const']!r}, got {instance!r}")
+    if "enum" in schema and instance not in schema["enum"]:
+        errors.append(f"{where}: {instance!r} not one of {schema['enum']}")
+    if "pattern" in schema and isinstance(instance, str) and not re.search(schema["pattern"], instance):
+        errors.append(f"{where}: {instance!r} does not match pattern {schema['pattern']}")
+    for combiner in ("allOf", "anyOf", "oneOf"):
+        if combiner not in schema:
+            continue
+        passed = 0
+        for sub in schema[combiner]:
+            sub_errors: list[str] = []
+            _check_schema(instance, sub, registry, root, path, sub_errors)
+            if not sub_errors:
+                passed += 1
+        if combiner == "allOf" and passed != len(schema[combiner]):
+            errors.append(f"{where}: did not satisfy all of allOf")
+        if combiner == "anyOf" and passed == 0:
+            errors.append(f"{where}: did not satisfy any of anyOf")
+        if combiner == "oneOf" and passed != 1:
+            errors.append(f"{where}: matched {passed} oneOf branches (expected exactly 1)")
+    if isinstance(instance, dict):
+        for required in schema.get("required", []):
+            if required not in instance:
+                errors.append(f"{where}: missing required field '{required}'")
+        min_props = schema.get("minProperties")
+        if min_props is not None and len(instance) < min_props:
+            errors.append(f"{where}: has {len(instance)} properties, fewer than minProperties {min_props}")
+        props = schema.get("properties", {})
+        pattern_props = schema.get("patternProperties", {})
+        additional = schema.get("additionalProperties", True)
+        for key, value in instance.items():
+            child = f"{path}.{key}" if path else str(key)
+            if key in props:
+                _check_schema(value, props[key], registry, root, child, errors)
+                continue
+            matched = False
+            for pattern, subschema in pattern_props.items():
+                if re.search(pattern, str(key)):
+                    matched = True
+                    _check_schema(value, subschema, registry, root, child, errors)
+            if matched:
+                continue
+            if additional is False:
+                errors.append(f"{child}: unknown field not permitted")
+            elif isinstance(additional, dict):
+                _check_schema(value, additional, registry, root, child, errors)
+    if isinstance(instance, list):
+        min_items = schema.get("minItems")
+        if min_items is not None and len(instance) < min_items:
+            errors.append(f"{where}: has {len(instance)} items, fewer than minItems {min_items}")
+        items = schema.get("items")
+        if isinstance(items, dict):
+            for index, element in enumerate(instance):
+                _check_schema(element, items, registry, root, f"{path}[{index}]", errors)
+
+
+def schema_validate(path: Path, data: dict[str, Any], registry: dict[str, dict], errors: list[str]) -> None:
+    """Validate one parsed document against the schema for its kind."""
+    schema_id = KIND_SCHEMA.get(data.get("kind"))
+    if schema_id is None:
+        return  # unknown/missing kind is reported by the cross-reference pass
+    root = registry.get(schema_id)
+    if root is None:
+        errors.append(f"{path}: schema {schema_id} not found in schemas/")
+        return
+    _check_schema(data, root, registry, root, "", errors)
+
 
 def parse_yaml(path: Path) -> dict[str, Any]:
     code = "require 'yaml'; require 'json'; obj = YAML.load_file(ARGV[0]); puts JSON.generate(obj)"
@@ -106,6 +247,19 @@ def validate(root: Path) -> list[str]:
             docs[path] = parse_yaml(path)
         except Exception as exc:
             errors.append(f"{path}: YAML parse failed: {exc}")
+
+    # Schema enforcement runs before any repo-specific cross-reference checks.
+    try:
+        registry = load_schema_registry()
+    except Exception as exc:
+        errors.append(f"failed to load JSON schemas from schemas/: {exc}")
+        registry = {}
+    if registry:
+        for path, data in docs.items():
+            schema_errors: list[str] = []
+            schema_validate(path, data, registry, schema_errors)
+            errors.extend(f"{path}: schema: {msg}" for msg in schema_errors)
+
     all_ids: Counter[str] = Counter()
     module_ids: set[str] = set()
     entity_ids: set[str] = set()

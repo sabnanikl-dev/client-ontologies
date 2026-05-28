@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papi.ai/schemas/module.schema.json",
+  "title": "Ontology module (kind: ontology_module)",
+  "description": "The substance of an ontology: entities, relationships, rules, and optional state machines for one workstream. Cross-reference checks (relationship endpoints, conditional evidence) live in scripts/validate_ontology.py.",
+  "$defs": {
+    "entity": {
+      "type": "object",
+      "required": ["id", "label", "entity_type", "description", "source_confidence"],
+      "properties": {
+        "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "label": {"type": "string"},
+        "entity_type": {"enum": ["business_object", "work_product", "content_record", "media_asset", "workflow_artifact", "system_resource", "governance_object", "metric", "brand_object"]},
+        "description": {"type": "string"},
+        "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"},
+        "source_confidence": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/confidence"},
+        "public_facing": {"type": "boolean"},
+        "workstreams": {"type": "array", "items": {"type": "string"}},
+        "fields": {"type": "object"},
+        "evidence": {"$ref": "https://papi.ai/schemas/evidence.schema.json#/$defs/evidenceList"}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["id", "subject", "predicate", "object", "source_confidence"],
+      "properties": {
+        "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "subject": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "predicate": {"type": "string"},
+        "object": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "source_confidence": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/confidence"},
+        "evidence": {"$ref": "https://papi.ai/schemas/evidence.schema.json#/$defs/evidenceList"}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    },
+    "stateMachine": {
+      "type": "object",
+      "required": ["id", "entity", "states"],
+      "properties": {
+        "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "entity": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "source_confidence": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/confidence"},
+        "evidence": {"$ref": "https://papi.ai/schemas/evidence.schema.json#/$defs/evidenceList"},
+        "states": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "public": {"type": "boolean"},
+              "next": {"type": "array", "items": {"type": "string"}}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    }
+  },
+  "type": "object",
+  "required": ["schema_version", "kind", "id", "title", "client_id", "status", "workstreams", "evidence_sources", "entities", "relationships", "rules"],
+  "properties": {
+    "schema_version": {"const": "0.1"},
+    "kind": {"const": "ontology_module"},
+    "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+    "title": {"type": "string"},
+    "client_id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+    "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"},
+    "workstreams": {"type": "array", "items": {"type": "string"}},
+    "evidence_sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "https://papi.ai/schemas/evidence.schema.json#/$defs/source"}
+    },
+    "entities": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
+    "relationships": {"type": "array", "items": {"$ref": "#/$defs/relationship"}},
+    "rules": {"type": "array", "items": {"$ref": "https://papi.ai/schemas/rule.schema.json#/$defs/rule"}},
+    "state_machines": {"type": "array", "items": {"$ref": "#/$defs/stateMachine"}}
+  },
+  "additionalProperties": false,
+  "patternProperties": {"^x_": {}}
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papi.ai/schemas/rule.schema.json",
+  "title": "Ontology rule",
+  "description": "Governance/operating rule carried by an ontology module. Conditional evidence requirements (active/approved/prohibited/verified rules must cite evidence) are enforced in scripts/validate_ontology.py, not here.",
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "required": ["id", "title", "status", "severity", "rule_type", "statement", "source_confidence"],
+      "properties": {
+        "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "title": {"type": "string"},
+        "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"},
+        "severity": {"enum": ["info", "warning", "blocking", "approval_required"]},
+        "rule_type": {"type": "string"},
+        "statement": {"type": "string"},
+        "machine_check": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {"type": {"type": "string"}},
+          "additionalProperties": true
+        },
+        "source_confidence": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/confidence"},
+        "evidence": {"$ref": "https://papi.ai/schemas/evidence.schema.json#/$defs/evidenceList"}
+      },
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}}
+    }
+  }
+}

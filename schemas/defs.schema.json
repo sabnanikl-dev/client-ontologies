@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papi.ai/schemas/defs.schema.json",
+  "title": "Shared ontology definitions",
+  "description": "Primitive $defs (id, status, confidence) reused across the per-kind ontology schemas. See scripts/validate_ontology.py for the deterministic validator that loads these.",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "status": {
+      "enum": ["draft", "proposed", "active", "approved", "owner_reviewed_internal", "deprecated", "prohibited", "unknown"]
+    },
+    "confidence": {
+      "enum": ["verified", "owner_reviewed", "inferred", "draft", "unknown"]
+    }
+  }
+}
