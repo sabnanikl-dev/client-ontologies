@@ -147,6 +147,14 @@ def validate(root: Path) -> list[str]:
         if count > 1:
             errors.append(f"duplicate ID across ontology files: {id_value}")
 
+    # Manifest-first: every client directory must carry its ontology.yaml entry point.
+    for client_yaml in sorted(root.glob("clients/*/client.yaml")):
+        manifest = client_yaml.parent / "ontology.yaml"
+        if not manifest.exists():
+            errors.append(f"{client_yaml.parent}: missing ontology.yaml manifest (required entry point for each client)")
+        elif docs.get(manifest, {}).get("kind") != "ontology":
+            errors.append(f"{manifest}: client manifest must be kind: ontology")
+
     docs_by_resolved = {p.resolve(): d for p, d in docs.items()}
 
     for path, data in docs.items():
@@ -220,7 +228,10 @@ def validate(root: Path) -> list[str]:
                     errors.append(f"{path}: projection references unknown rule: {rule_id}")
         elif kind == "ontology":
             client_dir = path.parent
+            client_root = client_dir.resolve()
+            expected_kind = {"modules": "ontology_module", "projections": "projection"}
             for section in ("modules", "projections"):
+                want_kind = expected_kind[section]
                 declared_paths: set[str] = set()
                 for entry in data.get(section, []) or []:
                     if not isinstance(entry, dict):
@@ -233,6 +244,9 @@ def validate(root: Path) -> list[str]:
                         continue
                     declared_paths.add(rel_path)
                     target = (client_dir / rel_path).resolve()
+                    if not target.is_relative_to(client_root):
+                        errors.append(f"{path}: manifest {section} entry escapes client directory: {rel_path}")
+                        continue
                     ref = docs_by_resolved.get(target)
                     if ref is None:
                         errors.append(f"{path}: manifest references missing or unparsed {section} file: {rel_path}")
@@ -240,6 +254,10 @@ def validate(root: Path) -> list[str]:
                     actual_id = ref.get("id")
                     if decl_id != actual_id:
                         errors.append(f"{path}: manifest {section} id mismatch for {rel_path}: declared {decl_id!r}, file declares {actual_id!r}")
+                    if ref.get("kind") != want_kind:
+                        errors.append(f"{path}: manifest {section} entry {rel_path} must reference kind {want_kind!r}, file declares {ref.get('kind')!r}")
+                    if ref.get("client_id") != data.get("client_id"):
+                        errors.append(f"{path}: manifest {section} entry {rel_path} client_id mismatch: manifest {data.get('client_id')!r}, file {ref.get('client_id')!r}")
                 present = {f"{section}/{p.name}" for p in (client_dir / section).glob("*.yaml")}
                 for unregistered in sorted(present - declared_paths):
                     errors.append(f"{path}: {section} file not registered in manifest: {unregistered}")

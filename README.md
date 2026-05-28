@@ -97,7 +97,7 @@ The validator checks:
 - Required fields exist for clients, modules, and projections.
 - IDs are stable, lowercase, and namespaced.
 - Duplicate ontology object IDs are rejected.
-- Each client `ontology.yaml` manifest resolves: every listed module/projection path exists, declared IDs match the loaded file IDs, and no module/projection file is left unregistered.
+- Every client directory has an `ontology.yaml` manifest, and each manifest resolves: every listed module/projection path exists, declared IDs match the loaded file IDs, each entry references the expected kind (`modules` → `ontology_module`, `projections` → `projection`) and the manifest's own `client_id`, no path escapes the client directory, and no module/projection file is left unregistered.
 - Module references, entity references, rule references, and projection references resolve where practical.
 - Verified/active/approved facts and rules have evidence.
 - Evidence `source_id` references point to local source registries.
