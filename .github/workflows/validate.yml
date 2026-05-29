@@ -1,0 +1,35 @@
+name: validate
+
+# The validator is the gate (see AGENTS.md / CLAUDE.md). Run it, the runtime
+# SQLite export, and the regression fixtures on every push and pull request so
+# malformed ontology data cannot merge.
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both scripts are Python that shell out to `ruby -e` for YAML parsing,
+      # so the runner needs Python 3 and Ruby on PATH. No pip/gem deps.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Validate ontology YAML
+        run: python3 scripts/validate_ontology.py
+
+      - name: Export runtime SQLite projection
+        run: python3 scripts/export_sqlite.py --output build/client-ontologies.sqlite
+
+      - name: Run invalid-fixture regression tests
+        run: python3 tests/run_fixtures.py
+
+      - name: Run valid-fixture validate + export tests
+        run: python3 tests/run_export.py
