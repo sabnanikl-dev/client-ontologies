@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://papi.ai/schemas/evidence.schema.json",
+  "$id": "https://client-ontologies.local/schemas/evidence.schema.json",
   "title": "Evidence sources and references",
   "description": "Schemas for source-registry / evidence_sources entries and for the evidence references that cite them. source_ids are file-local; cross-reference resolution is enforced in scripts/validate_ontology.py.",
   "$defs": {
@@ -23,7 +23,7 @@
       "type": "object",
       "required": ["id", "type", "description"],
       "properties": {
-        "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "id": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
         "type": {"$ref": "#/$defs/sourceType"},
         "path": {"type": "string"},
         "url": {"type": "string"},
@@ -37,7 +37,7 @@
       "type": "object",
       "required": ["source_id"],
       "properties": {
-        "source_id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+        "source_id": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
         "lines": {"type": "string"},
         "note": {"type": "string"}
       },

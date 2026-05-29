@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://papi.ai/schemas/ontology.schema.json",
+  "$id": "https://client-ontologies.local/schemas/ontology.schema.json",
   "title": "Client Operating Ontology v0.1",
   "description": "Umbrella schema that dispatches an ontology file to the matching per-kind schema by its `kind`. The deterministic validator in scripts/validate_ontology.py loads the per-kind schemas directly (selecting by `kind`) and then applies cross-reference, evidence, and secret-scan rules JSON Schema cannot express.",
   "oneOf": [
-    {"$ref": "https://papi.ai/schemas/client.schema.json"},
-    {"$ref": "https://papi.ai/schemas/manifest.schema.json"},
-    {"$ref": "https://papi.ai/schemas/module.schema.json"},
-    {"$ref": "https://papi.ai/schemas/projection.schema.json"}
+    {"$ref": "https://client-ontologies.local/schemas/client.schema.json"},
+    {"$ref": "https://client-ontologies.local/schemas/manifest.schema.json"},
+    {"$ref": "https://client-ontologies.local/schemas/module.schema.json"},
+    {"$ref": "https://client-ontologies.local/schemas/projection.schema.json"}
   ]
 }

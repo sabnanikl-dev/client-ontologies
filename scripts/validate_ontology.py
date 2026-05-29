@@ -42,10 +42,10 @@ REQUIRED = {
 # shape (types, enums, required identity fields, no unknown fields); repo-specific
 # cross-reference and conditional-evidence rules live in validate() below.
 KIND_SCHEMA = {
-    "client": "https://papi.ai/schemas/client.schema.json",
-    "ontology": "https://papi.ai/schemas/manifest.schema.json",
-    "ontology_module": "https://papi.ai/schemas/module.schema.json",
-    "projection": "https://papi.ai/schemas/projection.schema.json",
+    "client": "https://client-ontologies.local/schemas/client.schema.json",
+    "ontology": "https://client-ontologies.local/schemas/manifest.schema.json",
+    "ontology_module": "https://client-ontologies.local/schemas/module.schema.json",
+    "projection": "https://client-ontologies.local/schemas/projection.schema.json",
 }
 
 

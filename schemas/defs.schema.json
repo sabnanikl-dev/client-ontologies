@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://papi.ai/schemas/defs.schema.json",
+  "$id": "https://client-ontologies.local/schemas/defs.schema.json",
   "title": "Shared ontology definitions",
   "description": "Primitive $defs (id, status, confidence) reused across the per-kind ontology schemas. See scripts/validate_ontology.py for the deterministic validator that loads these.",
   "$defs": {

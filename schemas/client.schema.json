@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://papi.ai/schemas/client.schema.json",
+  "$id": "https://client-ontologies.local/schemas/client.schema.json",
   "title": "Client (kind: client)",
   "description": "Client-level metadata: client-wide source registry, privacy posture, and declared workstreams.",
   "type": "object",
@@ -8,14 +8,14 @@
   "properties": {
     "schema_version": {"const": "0.1"},
     "kind": {"const": "client"},
-    "id": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/id"},
+    "id": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
     "name": {"type": "string"},
-    "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"},
+    "status": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/status"},
     "client_type": {"type": "string"},
     "source_registry": {
       "type": "array",
       "minItems": 1,
-      "items": {"$ref": "https://papi.ai/schemas/evidence.schema.json#/$defs/source"}
+      "items": {"$ref": "https://client-ontologies.local/schemas/evidence.schema.json#/$defs/source"}
     },
     "privacy": {
       "type": "object",
@@ -35,7 +35,7 @@
         "required": ["id"],
         "properties": {
           "id": {"type": "string"},
-          "status": {"$ref": "https://papi.ai/schemas/defs.schema.json#/$defs/status"}
+          "status": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/status"}
         },
         "additionalProperties": false,
         "patternProperties": {"^x_": {}}
