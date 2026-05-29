@@ -62,7 +62,7 @@ The ontology must be usable by multiple consumers:
 - CI checks;
 - human developers;
 - client-facing handoff docs;
-- future hosted Papi systems.
+- future hosted ontology UIs, dashboards, and client-work systems.
 
 Therefore, canonical ontology files must avoid agent-specific language such as:
 
@@ -177,6 +177,17 @@ The client handoff view must remove:
 - credentials and tokens;
 - implementation-only agent routing details;
 - unfinished assumptions not labeled as draft/unknown.
+
+### 2.6 UI-first without SaaS lock-in
+
+Future consumers may include a lightweight UI for browsing, editing, validating, and exporting client ontologies. That UI should be treated as an interface over this canonical repo, not as a requirement to turn the ontology system into a SaaS platform.
+
+Design implications:
+
+- schema IDs and ontology namespaces should stay neutral and portable;
+- UI metadata should describe consumer views, forms, validation affordances, and safe actions without assuming a hosted product brand;
+- canonical truth remains reviewed files in this repository unless a later architecture decision explicitly changes that;
+- hosted dashboards, admin panels, or portals are consumers/projections, not the source of truth by default.
 
 ---
 
@@ -1055,8 +1066,8 @@ Use it when:
 Example Turtle-style export from a simple relationship:
 
 ```ttl
-@prefix co: <https://papi.ai/ontology/client#> .
-@prefix jmd: <https://papi.ai/ontology/clients/jmd-menswear#> .
+@prefix co: <urn:client-ontologies:ontology:client#> .
+@prefix jmd: <urn:client-ontologies:ontology:clients:jmd-menswear#> .
 
 jmd:InventoryImage a co:WorkProductEntity ;
   co:createsOrUpdates jmd:SanityAsset ;
@@ -1189,7 +1200,7 @@ if __name__ == "__main__":
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://papi.ai/schemas/client-ontology-module.schema.json",
+  "$id": "https://client-ontologies.local/schemas/client-ontology-module.schema.json",
   "title": "Client Ontology Module",
   "type": "object",
   "required": ["schema_version", "kind", "id", "client_id", "status"],
@@ -1970,7 +1981,7 @@ Repo/workflow/handoff projections
   ↓
 Implementation specs, CMS schemas, automation workflows, validation checks
   ↓
-Client-safe handoff documentation and reusable Papi patterns
+Client-safe handoff documentation and reusable client-ontology patterns
 ```
 
 This keeps the ontology practical for today's Femme/JMD work while preserving a path toward reusable client operating systems later.
