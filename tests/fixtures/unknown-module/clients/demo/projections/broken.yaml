@@ -1,0 +1,16 @@
+# Invalid fixture: a projection includes a module ID that no module declares.
+# Projection `includes` (modules/entities/rules) must resolve to canonical IDs.
+schema_version: "0.1"
+kind: projection
+id: demo.agent-context
+client_id: demo
+status: active
+projection_target:
+  type: agent_context
+includes:
+  modules: [demo.nonexistent]
+evidence_sources:
+  - id: demo-proj-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo projection source."

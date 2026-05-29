@@ -1,0 +1,53 @@
+# Valid fixture module: 2 entities, 1 relationship, 1 rule. Every active/verified
+# object carries evidence resolving to the file-local source registry below.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.core
+title: "Demo core"
+client_id: demo
+status: active
+workstreams: [core]
+evidence_sources:
+  - id: demo-core-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo module source doc."
+entities:
+  - id: demo.core.event
+    label: "Event"
+    entity_type: business_object
+    description: "A demo event."
+    status: active
+    source_confidence: inferred
+    evidence:
+      - source_id: demo-core-src
+        note: "Event concept."
+  - id: demo.core.venue
+    label: "Venue"
+    entity_type: business_object
+    description: "A demo venue."
+    status: active
+    source_confidence: inferred
+    evidence:
+      - source_id: demo-core-src
+        note: "Venue concept."
+relationships:
+  - id: demo.core.event-at-venue
+    subject: demo.core.event
+    predicate: held_at
+    object: demo.core.venue
+    source_confidence: inferred
+    evidence:
+      - source_id: demo-core-src
+        note: "Events are held at venues."
+rules:
+  - id: demo.core.approval
+    title: "Demo approval gate"
+    status: active
+    severity: approval_required
+    rule_type: governance
+    statement: "Demo changes require human approval."
+    source_confidence: inferred
+    evidence:
+      - source_id: demo-core-src
+        note: "Approval policy."

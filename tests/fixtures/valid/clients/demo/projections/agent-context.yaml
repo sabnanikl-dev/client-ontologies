@@ -1,0 +1,18 @@
+# Valid fixture projection: a curated slice referencing existing module/entity/rule IDs.
+schema_version: "0.1"
+kind: projection
+id: demo.agent-context
+client_id: demo
+status: active
+projection_target:
+  type: agent_context
+  consumer: demo-agent
+includes:
+  modules: [demo.core]
+  entities: [demo.core.event]
+  rules: [demo.core.approval]
+evidence_sources:
+  - id: demo-proj-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo projection source doc."

@@ -50,8 +50,12 @@ client-ontologies/
     validate_ontology.py
     export_sqlite.py
   tests/
-    run_fixtures.py
+    run_fixtures.py       # invalid fixtures must fail validation
+    run_export.py          # valid fixture must validate + export
     fixtures/
+  .github/
+    workflows/
+      validate.yml         # CI: validate, export, and run tests on push/PR
   clients/
     femme-events/
       ontology.yaml        # manifest: entry point listing modules + projections
@@ -115,13 +119,23 @@ The validator checks:
 - Evidence `source_id` references point to local source registries.
 - Obvious secret patterns and sensitive field names are rejected.
 
-## Test schema enforcement
+## Tests
 
-Negative fixtures prove the validator rejects malformed files (missing required fields, malformed IDs, bad enums, unknown kinds, unknown fields):
+Two dependency-light runners (no test framework) guard the validate → export path. Run both from the repo root:
 
 ```bash
-python3 tests/run_fixtures.py
+python3 tests/run_fixtures.py   # every invalid fixture must FAIL validation
+python3 tests/run_export.py     # the valid fixture must PASS, then export cleanly
 ```
+
+- `run_fixtures.py` drives `tests/fixtures/<case>/` through the validator. Each case is a minimal repo root that must fail for one specific reason — covering schema-shape rejections (missing required fields, malformed IDs, bad enums, unknown kinds, unknown fields, malformed manifests/projections) and cross-reference/evidence/secret rejections (missing evidence on an active object, a dangling relationship endpoint, a projection referencing an unknown module, a duplicate ID, and a committed secret pattern). It fails if any fixture unexpectedly passes or fails with the wrong message.
+- `run_export.py` validates `tests/fixtures/valid/` (a complete, passing client), then runs `export_sqlite.py` into a temporary database and asserts the expected tables and row counts. The repo's own `build/` directory is never touched.
+
+These fixtures live under `tests/` and use a synthetic `demo` client, so they are not picked up by a repo-root `validate_ontology.py` run.
+
+## Continuous integration
+
+`.github/workflows/validate.yml` runs on every push and pull request. It installs Python 3 and Ruby (the validator and exporter shell out to `ruby -e` for YAML parsing), then runs, in order: ontology validation, the SQLite export, `tests/run_fixtures.py`, and `tests/run_export.py`. Any validation or export error fails the build, so malformed data cannot merge.
 
 ## Export SQLite runtime projection
 

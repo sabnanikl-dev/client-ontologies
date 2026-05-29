@@ -1,0 +1,13 @@
+# Valid fixture manifest: the per-client entry point. Every file under modules/
+# and projections/ must be registered here with a matching id.
+schema_version: "0.1"
+kind: ontology
+id: demo.ontology
+client_id: demo
+status: active
+modules:
+  - path: "modules/core.yaml"
+    id: demo.core
+projections:
+  - path: "projections/agent-context.yaml"
+    id: demo.agent-context
