@@ -20,6 +20,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 # (fixture directory, substring expected in at least one reported error)
 CASES = [
+    # Schema-layer (shape) rejections.
     ("missing-required-field", "missing required field 'entities'"),
     ("malformed-id", "does not match pattern"),
     ("bad-enum", "not one of"),
@@ -28,6 +29,12 @@ CASES = [
     ("malformed-includes", "expected type object"),
     ("malformed-include-item", "expected type string"),
     ("malformed-manifest-path", "expected type string"),
+    # Cross-reference, evidence, and secret-scan rejections.
+    ("missing-evidence", "active/approved entity lacks evidence"),
+    ("dangling-relationship", "references unknown object"),
+    ("unknown-module", "projection references unknown module"),
+    ("duplicate-id", "duplicate ID across ontology files"),
+    ("secret-pattern", "possible secret pattern matched"),
 ]
 
 

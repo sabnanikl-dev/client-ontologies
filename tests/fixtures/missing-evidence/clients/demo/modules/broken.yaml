@@ -1,0 +1,24 @@
+# Invalid fixture: an entity with an enforced status (active) carries no evidence.
+# The validator gates active/approved/owner_reviewed_internal/prohibited objects
+# on evidence, so this must fail.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.brand.voice
+    label: "Voice"
+    entity_type: brand_object
+    description: "Brand voice."
+    status: active
+    source_confidence: inferred
+relationships: []
+rules: []

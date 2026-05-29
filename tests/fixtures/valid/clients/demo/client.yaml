@@ -1,0 +1,20 @@
+# Valid fixture: a minimal but complete client that must PASS validation and
+# export cleanly. Synthetic data only — no real client facts live here.
+schema_version: "0.1"
+kind: client
+id: demo
+name: Demo Client
+status: active
+client_type: demo
+source_registry:
+  - id: demo-registry-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo client-wide source doc."
+privacy:
+  public_handoff_allowed: false
+  contains_private_context: false
+  secret_policy: "No secrets."
+workstreams:
+  - id: core
+    status: active

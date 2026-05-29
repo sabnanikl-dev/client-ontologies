@@ -1,0 +1,27 @@
+# Invalid fixture: a relationship `object` points at an entity that does not exist.
+# Relationship subject/object must resolve to entity IDs defined in a module.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.brand.voice
+    label: "Voice"
+    entity_type: brand_object
+    description: "Brand voice."
+    source_confidence: draft
+relationships:
+  - id: demo.brand.voice-uses-palette
+    subject: demo.brand.voice
+    predicate: uses
+    object: demo.brand.palette
+    source_confidence: draft
+rules: []

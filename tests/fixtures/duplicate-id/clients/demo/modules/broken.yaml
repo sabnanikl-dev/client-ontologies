@@ -1,0 +1,27 @@
+# Invalid fixture: two entities share the same ID. Ontology object IDs must be
+# globally unique (evidence source_ids are the only file-local exception).
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.brand.voice
+    label: "Voice"
+    entity_type: brand_object
+    description: "Brand voice."
+    source_confidence: draft
+  - id: demo.brand.voice
+    label: "Voice (duplicate)"
+    entity_type: brand_object
+    description: "Duplicate ID on purpose."
+    source_confidence: draft
+relationships: []
+rules: []
