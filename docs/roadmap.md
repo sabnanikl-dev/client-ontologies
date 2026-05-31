@@ -59,6 +59,28 @@ v1 is **read-only** (no create/modify/delete) — modeling an operation must nev
 authority to run it (`AGENTS.md` core rule 6). The full v1 design lives in the runtime
 surface issue.
 
+### Placement & distribution
+
+The CLI, MCP server, and shared core **live in this repo**, co-located with the schema
+and data they operate on (same category as `validate_ontology.py` / `export_sqlite.py`).
+Consumers must never reimplement parse/guardrail logic — that would fork canonical
+semantics (`AGENTS.md`: consumers use projections/exports, they do not redefine canonical
+truth). This mirrors Foundry, where semantics stay with the ontology and consumers get a
+thin generated client (OSDK), not a logic copy.
+
+For an agentic-harness consumer (e.g. **Femme-visibility**):
+
+- **Package the core in-repo** (console entry point + minimal `pyproject.toml`), pinned by
+  tag/SHA for provenance (relates to #8). No separately published package yet.
+- **MCP is the agent's primary surface** — registered in the consumer's `.mcp.json`,
+  ideally via `uvx --from git+<this-repo>@<tag> ontology-mcp` so it runs in ephemeral
+  containers with no persistent install.
+- **CLI is the enforcement surface** — runs in the consumer's CI and a pre-publish git
+  hook so guardrails fire even when the agent doesn't call them.
+- **A SessionStart hook** provisions the tool + a fresh ontology snapshot at session boot.
+- **Consumers read the SQLite projection** (pure-Python stdlib `sqlite3`, no Ruby);
+  YAML + Ruby stays the authoring/CI path here. Canonical-vs-projection split, applied.
+
 ## Gaps not yet tracked by any issue
 
 Candidates for future issues, surfaced during the ontology review:
