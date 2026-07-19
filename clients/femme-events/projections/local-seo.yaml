@@ -20,6 +20,9 @@ includes:
     - femme-events.visibility.service-area
     - femme-events.visibility.google-business-profile
     - femme-events.visibility.review-request
+    - femme-events.visibility.metric.gbp-calls
+    - femme-events.visibility.metric.gbp-direction-requests
+    - femme-events.visibility.metric.website-clicks
     - femme-events.website.inquiry-form
     - femme-events.operations.photo-proof-inventory
   rules:

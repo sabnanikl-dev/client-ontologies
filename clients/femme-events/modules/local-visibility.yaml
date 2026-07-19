@@ -74,6 +74,48 @@ entities:
     evidence:
       - source_id: femme-local-seo-sot
         lines: "348-358"
+  - id: femme-events.visibility.metric.gbp-calls
+    label: "GBP calls"
+    entity_type: metric
+    status: draft
+    source_confidence: draft
+    public_facing: false
+    workstreams: [local_visibility]
+    description: "Count of phone calls initiated from the Femme Events Google Business Profile. Proposed outcome measure for local-visibility work; no baseline recorded yet."
+    fields:
+      definition: "Number of call actions on the GBP listing over a reporting window."
+      data_source: "Google Business Profile performance/insights, read-only api_readonly_snapshot when a snapshot is captured"
+      cadence: "monthly"
+      baseline: unknown
+      unit: count
+  - id: femme-events.visibility.metric.gbp-direction-requests
+    label: "GBP direction requests"
+    entity_type: metric
+    status: draft
+    source_confidence: draft
+    public_facing: false
+    workstreams: [local_visibility]
+    description: "Count of direction/route requests from the Femme Events Google Business Profile. Proposed outcome measure for local-visibility work; no baseline recorded yet."
+    fields:
+      definition: "Number of directions-request actions on the GBP listing over a reporting window."
+      data_source: "Google Business Profile performance/insights, read-only api_readonly_snapshot when a snapshot is captured"
+      cadence: "monthly"
+      baseline: unknown
+      unit: count
+  - id: femme-events.visibility.metric.website-clicks
+    label: "GBP website clicks"
+    entity_type: metric
+    status: draft
+    source_confidence: draft
+    public_facing: false
+    workstreams: [local_visibility]
+    description: "Count of website clicks from the Femme Events Google Business Profile to femmeevents.com. Proposed outcome measure for local-visibility work; no baseline recorded yet."
+    fields:
+      definition: "Number of website-click actions on the GBP listing over a reporting window."
+      data_source: "Google Business Profile performance/insights, read-only api_readonly_snapshot when a snapshot is captured"
+      cadence: "monthly"
+      baseline: unknown
+      unit: count
 relationships:
   - id: femme-events.visibility.gbp-uses-business-fact
     subject: femme-events.visibility.google-business-profile
@@ -91,6 +133,21 @@ relationships:
     evidence:
       - source_id: femme-local-seo-sot
         lines: "59-89"
+  - id: femme-events.visibility.gbp-calls-measures-gbp
+    subject: femme-events.visibility.metric.gbp-calls
+    predicate: measures
+    object: femme-events.visibility.google-business-profile
+    source_confidence: draft
+  - id: femme-events.visibility.gbp-direction-requests-measures-gbp
+    subject: femme-events.visibility.metric.gbp-direction-requests
+    predicate: measures
+    object: femme-events.visibility.google-business-profile
+    source_confidence: draft
+  - id: femme-events.visibility.website-clicks-measures-gbp
+    subject: femme-events.visibility.metric.website-clicks
+    predicate: measures
+    object: femme-events.visibility.google-business-profile
+    source_confidence: draft
 rules:
   - id: femme-events.visibility.no-public-address-without-approval
     title: "Do not publish a street address without explicit approval"
