@@ -1,0 +1,29 @@
+# Invalid fixture: the machine_check payload is malformed. disallowed_terms must
+# be a non-empty array of strings, but here it is a bare string, so the type-
+# discriminated oneOf in schemas/rule.schema.json matches zero branches and the
+# schema layer rejects it. Proves the tightened payload contract from issue #11.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities: []
+relationships: []
+rules:
+  - id: demo.brand.no-bad-terms
+    title: "No bad terms"
+    status: draft
+    severity: blocking
+    rule_type: content_voice
+    statement: "A malformed machine_check payload must fail schema validation."
+    source_confidence: draft
+    machine_check:
+      type: disallowed_terms
+      disallowed_terms: "oops-not-a-list"

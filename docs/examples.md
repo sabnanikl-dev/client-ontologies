@@ -204,3 +204,60 @@ ORDER BY subject;
 ```
 
 Consumer behavior: these metrics are `draft` with `baseline: unknown` — they define *what* to measure, not measured results. A consumer must not present them as achieved numbers, targets, or a baseline until a real read-only snapshot is captured and the entity is promoted with evidence.
+
+## Example 6 — run guardrail checks against draft copy (builders)
+
+Goal: a builder has drafted website/social copy and wants to catch rule violations *before* opening a PR or publishing. `scripts/check_rules.py` runs a client's machine-checkable rules (the `machine_check` payloads in the modules) against text and reports violations as JSON.
+
+1. Check inline copy for one client:
+
+```bash
+python3 scripts/check_rules.py --client jmd-menswear --text "Add to cart today"
+```
+
+Output (one object per violated rule):
+
+```json
+[
+  {
+    "rule_id": "jmd-menswear.website.showroom-not-ecommerce",
+    "severity": "blocking",
+    "status": "active",
+    "matched": ["add to cart"],
+    "statement": "JMD website content must frame inventory as showroom highlights, not live e-commerce inventory, checkout, cart, quantities, or guaranteed availability.",
+    "advisory": false
+  }
+]
+```
+
+This rule is `active` (enforceable) and `blocking`, so the command **exits non-zero** — a CI step or pre-publish hook can gate on it.
+
+2. Other text sources — a file, or stdin — for exactly one source per run:
+
+```bash
+python3 scripts/check_rules.py --client femme-events --file draft.md
+cat draft.md | python3 scripts/check_rules.py --client femme-events
+```
+
+3. Narrow the scope to a workstream or a projection's rules:
+
+```bash
+python3 scripts/check_rules.py --client jmd-menswear --workstream website --text "..."
+python3 scripts/check_rules.py --client jmd-menswear --projection jmd-menswear.website-build --text "..."
+```
+
+4. Exit-code semantics (issue #11 — inherited by the runtime `check-copy` operation):
+
+- Non-zero **only** when a violated rule is *enforceable* (`status` in `active`/`approved`/`prohibited`) and its `severity` meets the `--fail-on` threshold (default `blocking`).
+- `warning`/`info` violations are reported but exit 0 — tighten CI with `--fail-on warning`:
+
+```bash
+# Reports femme-events.brand.no-corporate-tone and exits 0 by default...
+python3 scripts/check_rules.py --client femme-events --text "We are a world-class luxury firm"
+# ...but exits non-zero when warnings are treated as failures:
+python3 scripts/check_rules.py --client femme-events --text "We are a world-class luxury firm" --fail-on warning
+```
+
+- `draft`/`proposed` rules are advisory only (`"advisory": true`): they are reported but **never** change the exit code, whatever their severity.
+
+Consumer behavior: this engine is deterministic (case-insensitive substring for term lists, `re.search` for `regex_policy`) — it is a copy/safety guardrail, not an approval to publish. A clean run does not grant live-account or publish authority; the approval rules still govern the action.
