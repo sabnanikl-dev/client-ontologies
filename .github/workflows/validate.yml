@@ -36,3 +36,14 @@ jobs:
 
       - name: Run machine-check rule engine tests
         run: python3 tests/run_checks.py
+
+      - name: Run evidence-health checker tests
+        run: python3 tests/run_evidence.py
+
+      # Advisory: re-hash cited evidence spans. External absolute paths (owner
+      # machines) are not available on the CI runner and report
+      # `unresolvable_in_environment`, which --strict treats as advisory and never
+      # blocks. Only genuine repo-relative drift/missing/invalid/unsupported anchors
+      # fail this step. See scripts/check_evidence.py for the exit contract.
+      - name: Evidence health (advisory for non-resolvable paths)
+        run: python3 scripts/check_evidence.py --strict

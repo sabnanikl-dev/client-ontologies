@@ -39,7 +39,17 @@
       "properties": {
         "source_id": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
         "lines": {"type": "string"},
-        "note": {"type": "string"}
+        "note": {"type": "string"},
+        "snapshot_date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "ISO-8601 date (YYYY-MM-DD) the cited span was last confirmed against the source."
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^sha256:utf8-lf-v1:[0-9a-f]{64}$",
+          "description": "Versioned SHA-256 of the cited lines: sha256:utf8-lf-v1:<64 lowercase hex>. utf8-lf-v1 = decode UTF-8, normalize CRLF/CR to LF, select the 1-based inclusive `lines` range(s), join with \\n (no trailing newline), SHA-256 the UTF-8 bytes. New normalization behavior must use a new version tag. Verified by scripts/check_evidence.py."
+        }
       },
       "additionalProperties": false,
       "patternProperties": {"^x_": {}}

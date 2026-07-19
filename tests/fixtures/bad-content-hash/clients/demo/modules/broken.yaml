@@ -1,0 +1,28 @@
+# Invalid fixture: content_hash is not the versioned sha256:utf8-lf-v1:<64 hex>
+# form the schema constrains (this one uses an unsupported version tag), so the
+# schema layer must reject it via the evidenceRef `content_hash` pattern.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.brand.voice
+    label: "Voice"
+    entity_type: brand_object
+    description: "Brand voice."
+    status: active
+    source_confidence: inferred
+    evidence:
+      - source_id: demo-src
+        lines: "1-2"
+        content_hash: "sha256:utf8-lf-v2:0000000000000000000000000000000000000000000000000000000000000000"
+relationships: []
+rules: []
