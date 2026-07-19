@@ -35,7 +35,6 @@ Recommended branch prefixes remain `docs/issue-N`, `ontology/issue-N`,
 
 #27 optional LangExtract toolchain -> #28 bounded pilot
 
-#24 new-client scaffold -> third-client onboarding -> trigger #5
 #5 interfaces/shared properties -> #12 handoffs -> #6 lifecycle/cleanup
 
 #19 runtime/MCP design -> reassess #7 retrieval contract
@@ -43,6 +42,12 @@ Recommended branch prefixes remain `docs/issue-N`, `ontology/issue-N`,
 
 Issues #22, #23, #24, #25, and #26 have no hard implementation dependency, but their
 placement below avoids rework and reduces risk for later agents.
+
+#24 (new-client scaffolding) and #5 (interfaces/shared properties) are linked only by
+soft, recommended sequencing — not a hard dependency. #24 is independent and recommended
+before onboarding the next client, while #5 is trigger-gated: it starts when a third
+client lands *or* concrete cross-client duplication/God-object pain appears. Onboarding a
+third client does not automatically require #5.
 
 ## Recommended execution queue
 
