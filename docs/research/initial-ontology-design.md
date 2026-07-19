@@ -217,5 +217,3 @@ contracts.
   no `handoff/` directory exists yet.)*
 - Do not copy projections into client implementation repos until reviewed. *(Still the
   standing policy.)*
-</content>
-</invoke>

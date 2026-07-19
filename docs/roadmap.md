@@ -242,4 +242,3 @@ One material gap remains only partially covered: typed properties with per-prope
 evidence and confidence. Issue #5 provides a possible extension point, but a separate
 issue should be filed only after real client data demonstrates that free-form entity
 fields are causing review or consumer failures.
-</content>
