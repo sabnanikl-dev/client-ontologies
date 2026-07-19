@@ -22,9 +22,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import check_rules as c  # noqa: E402
+import validate_ontology as v  # noqa: E402
 
 JMD_RULE = "jmd-menswear.website.showroom-not-ecommerce"
 FEMME_RULE = "femme-events.brand.no-corporate-tone"
+
+INVALID_REGEX_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "invalid-regex-policy"
 
 
 def _rule_ids(violations):
@@ -134,8 +137,49 @@ def unit_cases() -> list[str]:
     return failures
 
 
+def regex_validation_guard_cases() -> list[str]:
+    """Malformed canonical regex_policy patterns must be caught by validation, so
+    the CLI never has to discover them at runtime (which would exit 2 mid-check).
+
+    Asserts the gate order: validate_ontology rejects an uncompilable pattern up
+    front; evaluate_rule's runtime re.error -> CheckError is only a backstop for
+    data that somehow bypassed validation.
+    """
+    failures: list[str] = []
+
+    # Gate: validation rejects the uncompilable pattern before any CLI run.
+    errors = v.validate(INVALID_REGEX_FIXTURE)
+    if not any("invalid regex_policy pattern" in e for e in errors):
+        failures.append(
+            f"invalid-regex-policy: expected validation to report an invalid "
+            f"regex_policy pattern, got: {errors}"
+        )
+
+    # Backstop: if bad regex data ever slips past validation, the engine raises a
+    # CheckError rather than leaking a raw re.error.
+    bad_rule = {
+        "id": "demo.brand.no-bare-bracket",
+        "status": "active",
+        "severity": "blocking",
+        "statement": "s",
+        "machine_check": {"type": "regex_policy", "pattern": "[", "policy": "deny"},
+    }
+    try:
+        c.evaluate_rule(bad_rule, "anything")
+    except c.CheckError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"regex backstop: expected CheckError, got {type(exc).__name__}: {exc}")
+    else:
+        failures.append("regex backstop: expected CheckError for uncompilable pattern, got no exception")
+
+    if not failures:
+        print("ok: regex_policy validation gate (validation rejects; runtime CheckError is backstop only)")
+    return failures
+
+
 def main() -> int:
-    failures = integration_cases() + unit_cases()
+    failures = integration_cases() + unit_cases() + regex_validation_guard_cases()
     if failures:
         print("\nCHECK TEST FAILURES:", file=sys.stderr)
         for failure in failures:

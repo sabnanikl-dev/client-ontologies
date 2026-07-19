@@ -343,6 +343,17 @@ def validate(root: Path) -> list[str]:
                     errors.append(f"{path}: active/approved/prohibited rule lacks evidence: {rule.get('id')}")
                 if rule.get("source_confidence") == "verified" and not rule.get("evidence"):
                     errors.append(f"{path}: verified rule lacks evidence: {rule.get('id')}")
+                # regex_policy patterns pass the schema as bare strings; compile them
+                # here so a malformed pattern is a validation failure, not a runtime
+                # crash in scripts/check_rules.py (exit 2) on otherwise "valid" data.
+                machine_check = rule.get("machine_check")
+                if isinstance(machine_check, dict) and machine_check.get("type") == "regex_policy":
+                    pattern = machine_check.get("pattern")
+                    if isinstance(pattern, str):
+                        try:
+                            re.compile(pattern)
+                        except re.error as exc:
+                            errors.append(f"{path}: rule {rule.get('id')} has an invalid regex_policy pattern: {exc}")
         elif kind == "projection":
             includes = data.get("includes")
             if not isinstance(includes, dict):

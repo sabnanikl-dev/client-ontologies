@@ -1,0 +1,34 @@
+# Invalid fixture: the machine_check payload is schema-valid (a well-formed
+# regex_policy branch — `pattern` is a string, `policy` is `deny`), but the
+# pattern `[` is not a compilable regular expression. The schema layer cannot
+# catch this (it only checks that `pattern` is a string), so the cross-reference
+# pass in scripts/validate_ontology.py must compile it and reject the malformed
+# pattern — otherwise scripts/check_rules.py would crash with exit 2 at runtime
+# on a repository the validator reported as valid. Guards issue #11's contract
+# that malformed machine_check payloads are rejected by validation.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities: []
+relationships: []
+rules:
+  - id: demo.brand.no-bare-bracket
+    title: "No bare bracket"
+    status: draft
+    severity: blocking
+    rule_type: content_voice
+    statement: "An uncompilable regex_policy pattern must fail schema/cross-reference validation."
+    source_confidence: draft
+    machine_check:
+      type: regex_policy
+      pattern: "["
+      policy: deny

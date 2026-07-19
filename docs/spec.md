@@ -659,7 +659,7 @@ The list below is the aspirational catalog. What the schema **enforces and the e
 
 - `disallowed_terms` — non-empty string array; violation on case-insensitive substring match.
 - `required_terms` — non-empty string array; violation when any listed term is absent (case-insensitive).
-- `regex_policy` — `pattern` (string) + `policy: allow | deny`; matched via `re.search` (`deny` = matching text violates, `allow` = absence violates).
+- `regex_policy` — `pattern` (string) + `policy: allow | deny`; matched via `re.search` (`deny` = matching text violates, `allow` = absence violates). The schema only checks that `pattern` is a string, so `scripts/validate_ontology.py` additionally `re.compile`s every `regex_policy` pattern during its cross-reference pass — an uncompilable pattern is a validation failure, not a runtime crash in `scripts/check_rules.py`.
 
 Unknown types and malformed payloads fail validation. The remaining catalog entries — notably `status_transition` and an `approval_required_pattern` gate check — are **reserved**: they depend on approval gates (#9) and state machines (#10) and are added as new `oneOf` branches only when those land, so v1 neither validates nor executes them.
 

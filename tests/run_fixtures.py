@@ -31,6 +31,7 @@ CASES = [
     ("malformed-manifest-path", "expected type string"),
     ("machine-check-bad-payload", "machine_check: matched 0 oneOf branches"),
     # Cross-reference, evidence, and secret-scan rejections.
+    ("invalid-regex-policy", "invalid regex_policy pattern"),
     ("missing-evidence", "active/approved entity lacks evidence"),
     ("dangling-relationship", "references unknown object"),
     ("unknown-module", "projection references unknown module"),
