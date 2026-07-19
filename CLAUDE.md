@@ -33,10 +33,10 @@ python3 tests/run_export.py      # the valid fixture must validate + export clea
 
 `validate_ontology.py` runs two enforcement layers, schema first, then repo-specific checks. Know which layer owns which failure before you try to "fix" a rejection.
 
-**Schema layer** (`schemas/*.schema.json`, checked by a built-in draft-2020-12-subset evaluator — no external jsonschema). Per-kind schemas (`client`, `manifest`, `module`, `projection`) dispatch by `kind` over shared `$defs` (`defs`, `evidence`, `rule`); `ontology.schema.json` is the umbrella. It enforces **shape**:
+**Schema layer** (`schemas/*.schema.json`, checked by a built-in draft-2020-12-subset evaluator — no external jsonschema). Four per-kind schema files are dispatched by `kind` via the validator's `KIND_SCHEMA` map — `client` → `client.schema.json`, `ontology` → `manifest.schema.json`, `ontology_module` → `module.schema.json`, `projection` → `projection.schema.json` — over shared `$defs` (`defs`, `evidence`, `rule`); `ontology.schema.json` is the umbrella. It enforces **shape**:
 
 - types, `const`/`enum` controlled vocabularies, string `pattern`s, `required` identity fields, `minItems`/`minProperties`;
-- **unknown fields are rejected** (`additionalProperties: false`); the only escape hatch is an `x_`-prefixed key (`patternProperties: ^x_`) for local extensions.
+- **unknown fields are rejected on structured schema objects** (`additionalProperties: false`), where the only escape hatch is an `x_`-prefixed key (`patternProperties: ^x_`) for local extensions. A few containers are intentionally left open and accept arbitrary inner keys: `entity.fields` (bare `{"type": "object"}`, so `additionalProperties` defaults to allowed), `rule.machine_check` (`additionalProperties: true`), and per-state entries inside a state machine's `states` (`additionalProperties: true`).
 
 **Cross-reference / semantic pass** (Python in `validate_ontology.py`, runs after schema passes). It enforces **meaning**:
 
@@ -44,6 +44,6 @@ python3 tests/run_export.py      # the valid fixture must validate + export clea
 - evidence conditions: entities and rules in a public/enforced status (`active`, `approved`, `prohibited`, `owner_reviewed_internal`), and any entity, relationship, or rule with `source_confidence: verified`, must carry `evidence`; non-manifest, non-client files need a non-empty `evidence_sources`; every evidence `source_id` must resolve to a local source registry;
 - reference resolution: relationship `subject`/`object` → known entities; projection `includes` → known modules/entities/rules (supports `.*` wildcards);
 - manifest membership: each declared `path` exists and stays inside the client dir, declared `id`/`kind`/`client_id` match the target file, and no file is unregistered;
-- secret/PII scanning: known token patterns and sensitive-looking field names are rejected.
+- secret/sensitive-field scanning: known secret token patterns (`SECRET_PATTERNS`) and a fixed, narrow set of sensitive-looking field names (`password`, `api_key`, `access_token`, `refresh_token`, `private_key`, `client_secret`) are rejected — this does not scan PII values or categories generally.
 
 If schema and validator ever disagree about a shape, update the schema first (AGENTS.md: update schema/validator before adding files that depend on a new shape); don't weaken a check to make bad data pass.
