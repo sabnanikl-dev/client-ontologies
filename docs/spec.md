@@ -363,9 +363,9 @@ workstreams:
   - id: local_visibility
     status: active
   - id: inventory_images
-    status: planned
+    status: proposed
   - id: content_engine
-    status: candidate
+    status: draft
   - id: reporting
     status: active
 ```
@@ -1061,6 +1061,13 @@ jmd:NoRawDrivePublishRule a co:BlockingRule ;
 
 ### 13.1 Minimum validator responsibilities
 
+> **Historical design intent, not the current enforced contract.** This list is the
+> original sketch of validator responsibilities; the authoritative behavior is whatever
+> `scripts/validate_ontology.py` actually enforces (schema shape via `schemas/`, ID
+> hygiene/uniqueness, evidence conditions, reference resolution, `regex_policy`
+> compilation, manifest membership, and secret/sensitive-field scanning). Items below
+> that the shipped validator does not implement are flagged **Proposed**.
+
 A validator should check:
 
 - YAML/JSON parse success;
@@ -1071,7 +1078,11 @@ A validator should check:
 - active/approved claims have evidence;
 - public-facing rules have either evidence or explicit draft status;
 - projections reference existing modules/rules/entities;
-- handoff exports do not include obvious private paths or secrets unless explicitly marked internal.
+- **Proposed (not implemented):** handoff exports do not include obvious private paths or
+  secrets unless explicitly marked internal — the shipped validator scans canonical YAML
+  for secret tokens and a fixed set of sensitive field names, but has no handoff-export
+  validation path (no handoff export is built yet — the `clients/<client-id>/handoff/`
+  layout is itself marked **Proposed** above).
 
 > **Superseded by the shipped implementation.** The validator and JSON Schema code
 > blocks in §13.2 and §13.3 are the original design *sketches*. They are retained to

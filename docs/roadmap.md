@@ -56,7 +56,9 @@ work depends on them.
 
 #5 interfaces/shared properties -> #12 handoffs -> #6 lifecycle/cleanup
 
-#19 runtime/MCP design -> reassess #7 retrieval contract
+#19 runtime/MCP surface + #31 competency corpus -> explicit prerequisites to #7 activation
+    (activation also requires a measured full-load/filtered-SQLite failure + sanitized
+     gold source highlights; these gate activation, they do not authorize implementation)
 ```
 
 Issues #22, #23, and #24 have no hard implementation dependency, but their placement
@@ -96,7 +98,7 @@ current Phase 0 work and is described under Phases below.
 | 12 | **#5** | Add interfaces and shared properties | Trigger-gated: start only when a third client lands or concrete duplication/God-object pain appears. |
 | 13 | **#12** | Generate client-safe handoff packages | Planned after #5; benefits from #8 provenance and #21's loader even though neither is a strict technical blocker. |
 | 14 | **#6** | Add lifecycle, impact, deprecation, and cleanup workflows | Last in the planned #5 -> #12 -> #6 modeling-hygiene sequence. Keep separate from #23's evidence-health checks. |
-| 15 | **#7** | Represent semantic retrieval resources | Explicitly last and speculative. Reassess after #19/MCP exists; close or replace it if retrieval belongs in the service layer rather than canonical projection YAML. |
+| 15 | **#7** | Represent semantic retrieval resources | Explicitly last and speculative; **DO NOT BUILD YET**. Activation requires #19's runtime/CLI surface **and** #31's competency-question corpus as explicit prerequisites, plus a measured full-load/filtered-SQLite failure and sanitized gold source highlights — an evidence/benchmark gate, not an implementation authorization. Reassess after #19/MCP exists; close or replace it if retrieval belongs in the service layer rather than canonical projection YAML. |
 
 ## Pull-forward rules
 
@@ -202,6 +204,16 @@ Before implementing #7, compare its proposed projection metadata with the runtim
 surface delivered by #19. Current default retrieval remains full projection loading;
 semantic retrieval is opt-in only when scale or a real consumer requires it. Retrieved
 snippets are context, never evidence for a verified claim.
+
+Per issue #7, #7 is explicitly **DO NOT BUILD YET**. Its live activation gate makes both
+**#19** (runtime/CLI surface, to measure current consumer behavior) and **#31** (the
+competency-question corpus that defines the consumer questions retrieval must support)
+explicit prerequisites to activation — not merely related issues. Activation additionally
+requires a real consumer demonstrating a measured full-load or filtered-SQLite failure
+(accuracy, context-budget, or latency) and sanitized gold source highlights identifying
+the exact source spans. This is an evidence/benchmark gate on *when the work may start*;
+it does not authorize implementation, and it is distinct from #31's soft
+sequencing/reuse relationship with #19 recorded above.
 
 ## Runtime consumer surface shape
 
