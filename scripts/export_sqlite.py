@@ -9,25 +9,10 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
-
-def parse_yaml(path: Path) -> dict[str, Any]:
-    code = "require 'yaml'; require 'json'; obj = YAML.load_file(ARGV[0]); puts JSON.generate(obj)"
-    result = subprocess.run(["ruby", "-e", code, str(path)], text=True, capture_output=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"{path}: {result.stderr.strip() or result.stdout.strip()}")
-    data = json.loads(result.stdout or "{}")
-    if not isinstance(data, dict):
-        raise RuntimeError(f"{path}: root must be a mapping")
-    return data
-
-
-def yaml_paths(root: Path) -> list[Path]:
-    return sorted([*root.glob("clients/*/client.yaml"), *root.glob("clients/*/modules/*.yaml"), *root.glob("clients/*/projections/*.yaml")])
+from ontology_loader import iter_yaml, load_documents, parse_yaml
 
 
 def dump(value: Any) -> str:
@@ -44,7 +29,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS relationships;
         DROP TABLE IF EXISTS entities;
         DROP TABLE IF EXISTS modules;
+        DROP TABLE IF EXISTS manifests;
         DROP TABLE IF EXISTS clients;
+
+        CREATE TABLE manifests (
+          client_id TEXT NOT NULL,
+          manifest_id TEXT PRIMARY KEY,
+          status TEXT NOT NULL,
+          raw_json TEXT NOT NULL
+        );
 
         CREATE TABLE clients (
           client_id TEXT PRIMARY KEY,
@@ -166,10 +159,16 @@ def export(root: Path, output: Path) -> None:
     conn = sqlite3.connect(output)
     init_db(conn)
 
-    for path in yaml_paths(root):
-        data = parse_yaml(path)
+    # Enumerate via the shared loader so the export covers the exact same file
+    # set the validator gates on (manifest-first order included).
+    for path, data in load_documents(root).items():
         kind = data.get("kind")
-        if kind == "client":
+        if kind == "ontology":
+            conn.execute(
+                "INSERT INTO manifests VALUES (?, ?, ?, ?)",
+                (data.get("client_id"), data["id"], data.get("status"), dump(data)),
+            )
+        elif kind == "client":
             client_id = data["id"]
             conn.execute("INSERT INTO clients VALUES (?, ?, ?, ?, ?, ?)", (client_id, data.get("name"), data.get("status"), data.get("client_type"), str(path.relative_to(root)), dump(data)))
             insert_sources(conn, client_id, client_id, data.get("source_registry", []))
