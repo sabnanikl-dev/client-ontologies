@@ -11,7 +11,9 @@ Implemented v0.1 foundation:
 - `schemas/` — JSON Schema contract, split by resource kind (`client`, `manifest`, `module`, `projection`) over shared `$defs` (`defs`, `evidence`, `rule`); `ontology.schema.json` is the umbrella dispatcher.
 - `scripts/ontology_loader.py` — the single canonical YAML-reading entry point: `parse_yaml(path)`, manifest-first `iter_yaml(root)`, and `load_documents(root)`. Both the validator and exporter import it, so they parse files the same way and enumerate the same file set. Dependency-free (Ruby stdlib YAML).
 - `scripts/validate_ontology.py` — deterministic validator: enforces the per-kind JSON Schema first, then canonical cross-file reference and evidence rules.
+- `scripts/check_rules.py` — deterministic guardrail engine (stdlib-only, importable + CLI): runs a client's `machine_check` rules against draft copy and reports violations as JSON, with enforceable-severity exit codes.
 - `tests/run_fixtures.py` — proves invalid fixtures (`tests/fixtures/`) are rejected for the expected reason.
+- `tests/run_checks.py` — proves the guardrail engine's matching, advisory labeling, and exit-code semantics.
 - `scripts/export_sqlite.py` — optional runtime export into SQLite after YAML validates.
 - `docs/spec.md` — Client Operating Ontology Spec v0.1.
 - `docs/conventions.md` — ID, status, confidence, source, module, and approval conventions.
@@ -50,10 +52,12 @@ client-ontologies/
   scripts/
     ontology_loader.py     # shared YAML parse + manifest-first enumeration
     validate_ontology.py
+    check_rules.py         # machine_check guardrail engine (library + CLI)
     export_sqlite.py
   tests/
     run_fixtures.py       # invalid fixtures must fail validation
     run_export.py          # valid fixture must validate + export
+    run_checks.py          # guardrail engine matching + exit semantics
     fixtures/
   .github/
     workflows/
@@ -128,16 +132,18 @@ Two dependency-light runners (no test framework) guard the validate → export p
 ```bash
 python3 tests/run_fixtures.py   # every invalid fixture must FAIL validation
 python3 tests/run_export.py     # the valid fixture must PASS, then export cleanly
+python3 tests/run_checks.py     # the guardrail engine matches + exits correctly
 ```
 
-- `run_fixtures.py` drives `tests/fixtures/<case>/` through the validator. Each case is a minimal repo root that must fail for one specific reason — covering schema-shape rejections (missing required fields, malformed IDs, bad enums, unknown kinds, unknown fields, malformed manifests/projections) and cross-reference/evidence/secret rejections (missing evidence on an active object, a dangling relationship endpoint, a projection referencing an unknown module, a duplicate ID, and a committed secret pattern). It fails if any fixture unexpectedly passes or fails with the wrong message.
+- `run_fixtures.py` drives `tests/fixtures/<case>/` through the validator. Each case is a minimal repo root that must fail for one specific reason — covering schema-shape rejections (missing required fields, malformed IDs, bad enums, unknown kinds, unknown fields, malformed manifests/projections, and a malformed `machine_check` payload) and cross-reference/evidence/secret rejections (missing evidence on an active object, a dangling relationship endpoint, a projection referencing an unknown module, a duplicate ID, an uncompilable `regex_policy` pattern, and a committed secret pattern). It fails if any fixture unexpectedly passes or fails with the wrong message.
 - `run_export.py` validates `tests/fixtures/valid/` (a complete, passing client), then runs `export_sqlite.py` into a temporary database and asserts the expected tables and row counts. The repo's own `build/` directory is never touched.
+- `run_checks.py` exercises `scripts/check_rules.py` — the real-client acceptance cases (a blocking violation exits non-zero, a warning is reported but exits 0 until `--fail-on warning`) plus unit coverage of term/regex matching and the advisory (`draft`/`proposed` never gate) exit matrix.
 
 These fixtures live under `tests/` and use a synthetic `demo` client, so they are not picked up by a repo-root `validate_ontology.py` run.
 
 ## Continuous integration
 
-`.github/workflows/validate.yml` runs on every push and pull request. It installs Python 3 and Ruby (the validator and exporter shell out to `ruby -e` for YAML parsing), then runs, in order: ontology validation, the SQLite export, `tests/run_fixtures.py`, and `tests/run_export.py`. Any validation or export error fails the build, so malformed data cannot merge.
+`.github/workflows/validate.yml` runs on every push and pull request. It installs Python 3 and Ruby (the validator and exporter shell out to `ruby -e` for YAML parsing), then runs, in order: ontology validation, the SQLite export, `tests/run_fixtures.py`, `tests/run_export.py`, and `tests/run_checks.py`. Any validation, export, or check failure fails the build, so malformed data cannot merge.
 
 ## Export SQLite runtime projection
 
@@ -167,6 +173,25 @@ Example query:
 sqlite3 build/client-ontologies.sqlite \
   "SELECT rule_id, severity, statement FROM rules WHERE client_id='jmd-menswear' AND status='active';"
 ```
+
+## Run guardrail checks on draft copy
+
+Before public copy changes, run a client's machine-checkable rules against the
+draft with `scripts/check_rules.py` (stdlib-only; importable as a library and
+usable as a CLI):
+
+```bash
+python3 scripts/check_rules.py --client jmd-menswear --text "Add to cart today"
+```
+
+It prints violations as JSON `[{rule_id, severity, status, matched, statement, advisory}]`.
+Text comes from exactly one source — `--text`, `--file <path>`, or stdin — and
+scope can be narrowed with `--workstream <name>` or `--projection <id>`. The exit
+code is non-zero **only** when a violated rule is enforceable (`status` in
+`active`/`approved`/`prohibited`) and its `severity` meets `--fail-on` (default
+`blocking`; pass `--fail-on warning` to gate on warnings too). `draft`/`proposed`
+rules are advisory and never change the exit code. See `docs/examples.md`,
+Example 6, for the full walkthrough.
 
 ## How agents should consume projections
 

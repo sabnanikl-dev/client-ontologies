@@ -33,3 +33,6 @@ jobs:
 
       - name: Run valid-fixture validate + export tests
         run: python3 tests/run_export.py
+
+      - name: Run machine-check rule engine tests
+        run: python3 tests/run_checks.py

@@ -655,6 +655,14 @@ rule_severity:
 
 Rules should include machine checks when feasible.
 
+The list below is the aspirational catalog. What the schema **enforces and the engine executes today** is a narrower v1 set — `schemas/rule.schema.json` type-discriminates `machine_check` with a `oneOf` that accepts exactly three types, and `scripts/check_rules.py` executes them:
+
+- `disallowed_terms` — non-empty string array; violation on case-insensitive substring match.
+- `required_terms` — non-empty string array; violation when any listed term is absent (case-insensitive).
+- `regex_policy` — `pattern` (string) + `policy: allow | deny`; matched via `re.search` (`deny` = matching text violates, `allow` = absence violates). The schema only checks that `pattern` is a string, so `scripts/validate_ontology.py` additionally `re.compile`s every `regex_policy` pattern during its cross-reference pass — an uncompilable pattern is a validation failure, not a runtime crash in `scripts/check_rules.py`.
+
+Unknown types and malformed payloads fail validation. The remaining catalog entries — notably `status_transition` and an `approval_required_pattern` gate check — are **reserved**: they depend on approval gates (#9) and state machines (#10) and are added as new `oneOf` branches only when those land, so v1 neither validates nor executes them.
+
 ```yaml
 machine_check_types:
   - disallowed_terms
@@ -1320,6 +1328,10 @@ export async function loadProjectionRules(root: string, projection: {modules: st
 ```
 
 ### 14.2 Generic copy/content check
+
+This is the reference sketch. The shipped, importable implementation is
+`scripts/check_rules.py` (stdlib-only, CLI + library) — consumers should call it
+rather than re-derive the matching logic (see docs/examples.md, Example 6).
 
 ```python
 from dataclasses import dataclass

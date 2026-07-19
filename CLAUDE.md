@@ -24,7 +24,15 @@ python3 scripts/validate_ontology.py                                  # canonica
 python3 scripts/export_sqlite.py --output build/client-ontologies.sqlite   # runtime projection
 python3 tests/run_fixtures.py    # every invalid fixture must FAIL for its reason
 python3 tests/run_export.py      # the valid fixture must validate + export cleanly
+python3 tests/run_checks.py      # the machine_check guardrail engine matches + exits correctly
 ```
+
+`scripts/check_rules.py` is the runtime guardrail engine (library + CLI, stdlib
+only): it runs a client's `machine_check` rules against copy
+(`--client <slug> [--workstream <name> | --projection <id>] --text|--file|stdin`)
+and exits non-zero only for enforceable (`active`/`approved`/`prohibited`) rules
+meeting `--fail-on` (default `blocking`). It is not part of the four-command
+commit gate above, but `tests/run_checks.py` guards it and runs in CI.
 
 - **Ruby must be on PATH.** Both Python scripts shell out to `ruby -e` (`require 'yaml'`) to parse YAML, so the repo needs neither PyYAML nor jsonschema — but a session without `ruby` will fail every parse. There are no pip/gem dependencies otherwise.
 - **`build/` is gitignored** (along with `__pycache__/`, `*.py[cod]`, `.DS_Store`). The SQLite export is a local runtime artifact — never commit it unless an issue explicitly asks.
@@ -36,13 +44,14 @@ python3 tests/run_export.py      # the valid fixture must validate + export clea
 **Schema layer** (`schemas/*.schema.json`, checked by a built-in draft-2020-12-subset evaluator — no external jsonschema). Four per-kind schema files are dispatched by `kind` via the validator's `KIND_SCHEMA` map — `client` → `client.schema.json`, `ontology` → `manifest.schema.json`, `ontology_module` → `module.schema.json`, `projection` → `projection.schema.json` — over shared `$defs` (`defs`, `evidence`, `rule`); `ontology.schema.json` is the umbrella. It enforces **shape**:
 
 - types, `const`/`enum` controlled vocabularies, string `pattern`s, `required` identity fields, `minItems`/`minProperties`;
-- **unknown fields are rejected on structured schema objects** (`additionalProperties: false`), where the only escape hatch is an `x_`-prefixed key (`patternProperties: ^x_`) for local extensions. A few containers are intentionally left open and accept arbitrary inner keys: `entity.fields` (bare `{"type": "object"}`, so `additionalProperties` defaults to allowed), `rule.machine_check` (`additionalProperties: true`), and per-state entries inside a state machine's `states` (`additionalProperties: true`).
+- **unknown fields are rejected on structured schema objects** (`additionalProperties: false`), where the only escape hatch is an `x_`-prefixed key (`patternProperties: ^x_`) for local extensions. A few containers are intentionally left open and accept arbitrary inner keys: `entity.fields` (bare `{"type": "object"}`, so `additionalProperties` defaults to allowed) and per-state entries inside a state machine's `states` (`additionalProperties: true`). `rule.machine_check` is **not** open: it is type-discriminated by a `oneOf` keyed on `type` accepting exactly `disallowed_terms`, `required_terms`, and `regex_policy`, each with a fixed `additionalProperties: false` payload (still allowing `x_`-prefixed extensions); unknown types and malformed payloads fail. `scripts/check_rules.py` executes these checks and its type set is kept in lockstep with this `oneOf`.
 
 **Cross-reference / semantic pass** (Python in `validate_ontology.py`, runs after schema passes). It enforces **meaning**:
 
 - ID hygiene: lowercase/namespaced pattern, IDs namespaced under their `client_id`, and global uniqueness of ontology object IDs (evidence `source_id`s are file-local, not global);
 - evidence conditions: entities and rules in a public/enforced status (`active`, `approved`, `prohibited`, `owner_reviewed_internal`), and any entity, relationship, or rule with `source_confidence: verified`, must carry `evidence`; non-manifest, non-client files need a non-empty `evidence_sources`; every evidence `source_id` must resolve to a local source registry;
 - reference resolution: relationship `subject`/`object` → known entities; projection `includes` → known modules/entities/rules (supports `.*` wildcards);
+- executable-payload sanity: every rule's `regex_policy` `machine_check` pattern is `re.compile`d here (the schema only checks it is a string), so an uncompilable pattern fails validation rather than crashing `scripts/check_rules.py` at runtime;
 - manifest membership: each declared `path` exists and stays inside the client dir, declared `id`/`kind`/`client_id` match the target file, and no file is unregistered;
 - secret/sensitive-field scanning: known secret token patterns (`SECRET_PATTERNS`) and a fixed, narrow set of sensitive-looking field names (`password`, `api_key`, `access_token`, `refresh_token`, `private_key`, `client_secret`) are rejected — this does not scan PII values or categories generally.
 
