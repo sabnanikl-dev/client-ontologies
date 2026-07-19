@@ -873,52 +873,62 @@ Use SQLite for local agent/script lookup when:
 - a workflow needs a portable single-file artifact;
 - no multi-user hosted app is needed.
 
-Example schema:
+`scripts/export_sqlite.py --output build/client-ontologies.sqlite` produces the live
+single-file database. It creates nine tables — `manifests`, `clients`, `modules`,
+`entities`, `relationships`, `rules`, `projections`, `sources`, and `evidence` — each row
+carrying a `raw_json` column with the full canonical object. The schema below is
+reproduced from the shipped `scripts/export_sqlite.py`; the three canonical-fact tables
+and the supporting indexes are shown verbatim:
 
 ```sql
-CREATE TABLE ontology_entities (
+CREATE TABLE entities (
   client_id TEXT NOT NULL,
   module_id TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
+  entity_id TEXT PRIMARY KEY,
   label TEXT NOT NULL,
   entity_type TEXT NOT NULL,
+  status TEXT,
+  source_confidence TEXT,
   public_facing INTEGER NOT NULL DEFAULT 0,
-  raw_json TEXT NOT NULL,
-  PRIMARY KEY (client_id, module_id, entity_id)
+  raw_json TEXT NOT NULL
 );
 
-CREATE TABLE ontology_relationships (
+CREATE TABLE relationships (
   client_id TEXT NOT NULL,
   module_id TEXT NOT NULL,
-  relationship_id TEXT NOT NULL,
+  relationship_id TEXT PRIMARY KEY,
   subject TEXT NOT NULL,
   predicate TEXT NOT NULL,
   object TEXT NOT NULL,
-  raw_json TEXT NOT NULL,
-  PRIMARY KEY (client_id, module_id, relationship_id)
+  source_confidence TEXT,
+  raw_json TEXT NOT NULL
 );
 
-CREATE TABLE ontology_rules (
+CREATE TABLE rules (
   client_id TEXT NOT NULL,
   module_id TEXT NOT NULL,
-  rule_id TEXT NOT NULL,
+  rule_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
   status TEXT NOT NULL,
   severity TEXT NOT NULL,
   rule_type TEXT NOT NULL,
   statement TEXT NOT NULL,
-  raw_json TEXT NOT NULL,
-  PRIMARY KEY (client_id, module_id, rule_id)
+  source_confidence TEXT,
+  raw_json TEXT NOT NULL
 );
 
-CREATE INDEX idx_rules_client_status ON ontology_rules(client_id, status);
-CREATE INDEX idx_entities_client_type ON ontology_entities(client_id, entity_type);
+CREATE INDEX idx_modules_client ON modules(client_id);
+CREATE INDEX idx_entities_client_type ON entities(client_id, entity_type);
+CREATE INDEX idx_rules_client_status ON rules(client_id, status);
+CREATE INDEX idx_rules_client_severity ON rules(client_id, severity);
+CREATE INDEX idx_evidence_item ON evidence(item_id);
 ```
 
-Example query:
+Example query against the live `rules` table:
 
 ```sql
 SELECT rule_id, severity, statement
-FROM ontology_rules
+FROM rules
 WHERE client_id = 'jmd-menswear'
   AND status IN ('active', 'approved')
   AND raw_json LIKE '%website_showroom%';
