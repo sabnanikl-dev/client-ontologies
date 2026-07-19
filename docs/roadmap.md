@@ -1,94 +1,201 @@
 # Implementation Roadmap
 
-This roadmap sequences the open enhancement issues plus the (not-yet-filed) runtime
-consumer surface. It exists so the work lands in dependency order, one reviewable PR
-at a time, instead of as a large undifferentiated batch.
+This roadmap sequences the open repository issues in dependency order so work lands as
+small, reviewable changes rather than a large undifferentiated batch. It covers the
+core runtime path, governance and modeling work, the optional LangExtract experiment,
+and trigger-gated future work.
 
-It is documentation, not canonical ontology truth: it records *how* we plan to evolve
-the repo, and is expected to change as issues are completed.
+This file is planning documentation, not canonical ontology truth. GitHub Issues remain
+the implementation contracts, and this roadmap must be refreshed whenever the open
+issue set or dependency graph changes.
 
-## Workflow: issues vs PRs
+## Delivery policy
 
-Per [`AGENTS.md`](../AGENTS.md) ("one issue, one branch, one PR"; builders never
-self-approve/merge; docs update in the same PR):
+Per [`AGENTS.md`](../AGENTS.md):
 
-- The existing enhancement issues (**#4–#12**) stay as issues — they become PRs one at
-  a time, in the order below. Do **not** open many PRs at once.
-- The **runtime consumer surface** is tracked in **#19** (Phase 1 below).
-- Each issue → its own `scripts/issue-N` / `ontology/issue-N` / `schema/issue-N` branch
-  → one focused PR → human review/merge → next.
+- Work one issue at a time: one issue, one branch, one focused PR.
+- Builders do not self-approve or merge.
+- Update the relevant ontology docs in the same PR when concepts, schema, validation,
+  export behavior, or consumer semantics change.
+- Do not open a stack of implementation PRs merely because several issues are ready.
+- Reconstruct current repo and issue state before starting; this file records the
+  recommended order, but the assigned issue remains the acceptance contract.
 
-## Why this order
+Recommended branch prefixes remain `docs/issue-N`, `ontology/issue-N`,
+`schema/issue-N`, `scripts/issue-N`, `fix/issue-N`, or `chore/issue-N`.
 
-Real dependencies drive the sequence:
+## Hard dependency map
 
-- The runtime surface's copy check **is** issue #11's `machine_check` engine.
-- Issue #4 (actions) and issue #10 (state-machine guards) both **reference** issue #9
-  (approval gates), so #9 comes first.
-- The runtime surface's provenance metadata overlaps issue #8.
-- A shared loader refactor (`scripts/ontology_loader.py`) pays off in every later
-  export/validator change, so it lands first.
+```text
+#21 shared loader -> #11 machine checks -> #19 runtime surface
 
-## Phases
+#9 approval gates -> #8 provenance
+#9 approval gates -> #4 actions -> #10 state-machine guards
+#9 approval gates ---------------------> #10 state-machine guards
 
-| Phase | Work | Depends on / why here |
-|------|------|----------------------|
-| **0 — Foundations** | Loader consolidation (`scripts/ontology_loader.py`, refactored out of `validate_ontology.py` / `export_sqlite.py`) + **#11** machine-check engine (`scripts/check_rules.py`) and `machine_check` payload validation | Smallest, self-contained primitives that the rest (incl. the runtime surface) build on |
-| **1 — Runtime surface v1** | **#19:** shared stdlib core (`ontology_service.py`) + **CLI** (`ontology_cli.py`) for `list-clients` / `context` / `rules` / `check-copy` / `projection`; read-only; configurable YAML/SQLite source | Consumes #11's engine; delivers immediate ops value (e.g. a Femme-visibility pre-publish `check-copy` hook) |
-| **2 — Governance primitives** | **#9** approval gates & records first-class → **#8** projection provenance/version metadata | Many resources point at approval gates; #8 lets the surface emit real provenance |
-| **3 — Kinetic / workflow layer** | **#4** actions/functions → **#10** state machines → **MCP adapter** (+ read-only `list_actions` / `check_action_allowed`) | #4 and #10 reference #9; the MCP adapter extends the surface over the richer model |
-| **4 — Modeling hygiene & consumer outputs** | **#5** interfaces/shared properties → **#12** client-safe handoff generation → **#6** lifecycle/deprecation/cleanup | #5 is the most invasive refactor; deferred to avoid premature abstraction with only 2 clients — **pull forward when a 3rd/4th client lands** |
-| **5 — Speculative** | **#7** semantic search / Ontology-Augmented-Generation contract; future HTTP API adapter | Most forward-looking; the API adapter slots onto the existing core purely additively |
+#27 optional LangExtract toolchain -> #28 bounded pilot
 
-## Runtime consumer surface (Phase 1) shape
+#24 new-client scaffold -> third-client onboarding -> trigger #5
+#5 interfaces/shared properties -> #12 handoffs -> #6 lifecycle/cleanup
 
-One shared, stdlib-first core with thin adapters, so the choice of surface is additive
-rather than either/or:
-
-```
-scripts/ontology_loader.py   ── load + resolve projections (stdlib)
-scripts/check_rules.py       ── machine_check engine (stdlib, = issue #11)
-scripts/ontology_service.py  ── transport-agnostic ops, return plain JSON dicts
-        │
-        ├── scripts/ontology_cli.py        ← v1 NOW   (stdlib; CI / git-hook / test friendly)
-        ├── server/ontology_mcp.py         ← NEXT     (thin MCP stdio adapter; mcp SDK, isolated)
-        └── server/ontology_api.py         ← LATER    (thin HTTP adapter; purely additive)
+#19 runtime/MCP design -> reassess #7 retrieval contract
 ```
 
-v1 is **read-only** (no create/modify/delete) — modeling an operation must never grant
-authority to run it (`AGENTS.md` core rule 6). The full v1 design lives in the runtime
-surface issue.
+Issues #22, #23, #24, #25, and #26 have no hard implementation dependency, but their
+placement below avoids rework and reduces risk for later agents.
 
-### Placement & distribution
+## Recommended execution queue
 
-The CLI, MCP server, and shared core **live in this repo**, co-located with the schema
-and data they operate on (same category as `validate_ontology.py` / `export_sqlite.py`).
-Consumers must never reimplement parse/guardrail logic — that would fork canonical
-semantics (`AGENTS.md`: consumers use projections/exports, they do not redefine canonical
-truth). This mirrors Foundry, where semantics stay with the ontology and consumers get a
-thin generated client (OSDK), not a logic copy.
+| Order | Issue | Work | Why here / gate |
+|---:|---:|---|---|
+| 1 | **#26** | Correct stale `CLAUDE.md` agent guidance | Fix misleading repo instructions before assigning implementation work to builders. |
+| 2 | **#25** | Model measurable outcomes with the `metric` entity type | Small ontology-authoring warm-up; establishes real metric relationships before #22 freezes a controlled predicate vocabulary. |
+| 3 | **#21** | Consolidate YAML parsing and make export manifest-aware | Shared technical foundation; hard prerequisite for #11 and #19 and reusable by later scripts. |
+| 4 | **#11** | Implement machine-checkable copy and safety rules | Consumes #21 and supplies the `machine_check` engine required by #19. |
+| 5 | **#19** | Deliver the read-only runtime core and CLI | First major consumer value: clients, context, projections, rules, and copy checks through one shared service layer. |
+| 6 | **#9** | Make approval gates and records first-class | Governance foundation; blocks #4 and the approval-guard portion of #10. |
+| 7 | **#8** | Add projection provenance and runtime build metadata | Follows #9 in the governance layer and lets consumers identify the ontology state behind projections and exports. |
+| 8 | **#23** | Add portable evidence anchors and evidence-health reporting | Completes the provenance/evidence integrity layer without conflating citation health with resource lifecycle. |
+| 9 | **#22** | Constrain relationship predicates, cardinality, and inverse names | Land after #25 exposes any real metric predicate such as `measures`; stabilize relationship semantics before broader model expansion. |
+| 10 | **#4** | Model actions, functions, and agent-exposed operations | Requires #9. Modeling an operation makes it discoverable, never automatically executable. |
+| 11 | **#10** | Validate/export state machines and add transition guards | Planned after #4; guard behavior requires #9. Validation/export may be split first only if #9 is unexpectedly delayed. |
+| 12 | **#24** | Add deterministic new-client scaffolding | Reuse #21's loader and land before onboarding a third real client. |
+| 13 | **#27** | Add the isolated optional LangExtract toolchain | Begins an optional experimental lane without adding dependencies to canonical validation/export. |
+| 14 | **#28** | Pilot source-grounded candidate extraction on Femme and JMD fixtures | Hard-blocked by #27; must end in a measured continue, narrow, or stop decision and must not write canonical truth automatically. |
+| 15 | **#5** | Add interfaces and shared properties | Trigger-gated: start only when a third client lands or concrete duplication/God-object pain appears. |
+| 16 | **#12** | Generate client-safe handoff packages | Planned after #5; benefits from #8 provenance and #21's loader even though neither is a strict technical blocker. |
+| 17 | **#6** | Add lifecycle, impact, deprecation, and cleanup workflows | Last in the planned #5 -> #12 -> #6 modeling-hygiene sequence. Keep separate from #23's evidence-health checks. |
+| 18 | **#7** | Represent semantic retrieval resources | Explicitly last and speculative. Reassess after #19/MCP exists; close or replace it if retrieval belongs in the service layer rather than canonical projection YAML. |
 
-For an agentic-harness consumer (e.g. **Femme-visibility**):
+## Pull-forward rules
 
-- **Package the core in-repo** (console entry point + minimal `pyproject.toml`), pinned by
-  tag/SHA for provenance (relates to #8). No separately published package yet.
-- **MCP is the agent's primary surface** — registered in the consumer's `.mcp.json`,
-  ideally via `uvx --from git+<this-repo>@<tag> ontology-mcp` so it runs in ephemeral
-  containers with no persistent install.
-- **CLI is the enforcement surface** — runs in the consumer's CI and a pre-publish git
-  hook so guardrails fire even when the agent doesn't call them.
-- **A SessionStart hook** provisions the tool + a fresh ontology snapshot at session boot.
-- **Consumers read the SQLite projection** (pure-Python stdlib `sqlite3`, no Ruby);
-  YAML + Ruby stays the authoring/CI path here. Canonical-vs-projection split, applied.
+The table is the default queue, not a reason to ignore changed business context:
 
-## Gaps not yet tracked by any issue
+- If source-grounded intake is the active experiment, **#27 -> #28** may move directly
+  after #21. Keep both PRs isolated from the canonical runtime dependency path.
+- If a third client is imminent, move **#24** directly after #21. Start **#5** only after
+  onboarding exposes actual shared-property or interface pressure.
+- Independent quality work **#22**, **#23**, and **#24** may fill a deliberate gap, but
+  should not delay the #21 -> #11 -> #19 path without a concrete reason.
+- Do not start **#4** or approval-guarded **#10** work before #9.
+- Do not start **#19** before both #21 and #11.
+- Do not pull **#7** forward while full-projection loading remains sufficient at current
+  scale.
 
-Candidates for future issues, surfaced during the ontology review:
+## Phases and completion gates
 
-- Typed properties with per-property evidence/confidence (only partially covered by #5).
-- Relationship cardinality, controlled predicate vocabulary, and inverse names
-  (relationships are free-string today).
-- Evidence verifiability: evidence line-ranges point at absolute local paths that are
-  not in the repo, so CI and other agents cannot verify them — consider vendoring
-  sanitized sources or using stable anchors.
-- Wiring the unused `metric` entity type to targets/datasources.
+### Phase 0 — Agent hygiene and a small authoring proof
+
+Issues: **#26 -> #25**
+
+Exit gate:
+
+- Agent-facing guidance matches the current manifest, schema, validator, export, test,
+  and CI reality.
+- The existing `metric` resource type has one evidence-backed, validated use rather than
+  remaining an unused schema possibility.
+
+### Phase 1 — Shared foundations and runtime v1
+
+Issues: **#21 -> #11 -> #19**
+
+Exit gate:
+
+- Validator, exporter, and new consumers share one manifest-aware loader.
+- Machine checks have deterministic positive and negative coverage.
+- A read-only CLI exposes the agreed v1 operations without granting mutation authority.
+
+### Phase 2 — Governance and semantic integrity
+
+Issues: **#9 -> #8 -> #23 -> #22**
+
+Exit gate:
+
+- Approval gates, scoped approval records, provenance, evidence health, and relationship
+  semantics are machine-checkable and exported where specified.
+- Approval records remain evidence of one scoped past approval, never standing authority
+  for future actions.
+
+### Phase 3 — Kinetic and workflow semantics
+
+Issues: **#4 -> #10**
+
+Exit gate:
+
+- Actions and state transitions are queryable, validated, and approval-aware.
+- Defining or exposing an action does not authorize a runtime mutation.
+- Any MCP `list_actions` or `check_action_allowed` extension remains read-only unless a
+  separately approved runtime authority design exists.
+
+### Phase 4 — Onboarding and bounded intake experiments
+
+Issues: **#24**, then optional **#27 -> #28**
+
+Exit gate:
+
+- A third client can be scaffolded deterministically without copying an existing client.
+- If the LangExtract lane is run, its report records misses, false positives, reviewer
+  effort, cost visibility, security observations, and an explicit continue/narrow/stop
+  decision.
+
+### Phase 5 — Trigger-gated modeling maturity
+
+Issues: **#5 -> #12 -> #6**
+
+Start gate:
+
+- A third client exists or concrete cross-client duplication makes interfaces/shared
+  properties useful now.
+
+Exit gate:
+
+- Shared concepts are modeled without premature taxonomy sprawl.
+- Handoff exports are client-safe and provenance-aware.
+- Lifecycle and cleanup reports identify stale, deprecated, or orphaned resources without
+  deleting anything automatically.
+
+### Phase 6 — Speculative retrieval and later adapters
+
+Issue: **#7**, plus any separately filed HTTP adapter work.
+
+Before implementing #7, compare its proposed projection metadata with the runtime/MCP
+surface delivered by #19. Current default retrieval remains full projection loading;
+semantic retrieval is opt-in only when scale or a real consumer requires it. Retrieved
+snippets are context, never evidence for a verified claim.
+
+## Runtime consumer surface shape
+
+One shared, stdlib-first core with thin adapters keeps transport choices additive:
+
+```text
+scripts/ontology_loader.py   -- load + resolve projections (stdlib, #21)
+scripts/check_rules.py       -- machine_check engine (stdlib, #11)
+scripts/ontology_service.py  -- transport-agnostic operations, plain JSON dicts (#19)
+        |
+        +-- scripts/ontology_cli.py       <- v1: CI / hooks / local consumers
+        +-- server/ontology_mcp.py        <- next: thin isolated MCP adapter
+        +-- server/ontology_api.py        <- later: separately scoped HTTP adapter
+```
+
+Runtime v1 is read-only. The CLI, MCP adapter, and shared core live in this repository,
+co-located with the schema and data they interpret. Consumers install or register that
+implementation rather than reimplementing parser and guardrail logic downstream.
+
+For an agentic-harness consumer such as Femme Visibility:
+
+- Pin the in-repo consumer package by tag or commit for provenance.
+- Use MCP as an agent-facing query surface when appropriate.
+- Use the CLI as the deterministic CI or pre-publication enforcement surface.
+- Consume the generated SQLite projection when a Ruby-free runtime path is required.
+- Keep YAML authoring and canonical validation in this repository.
+
+## Remaining untracked design gap
+
+The currently known open issues cover relationship semantics (#22), evidence portability
+(#23), new-client scaffolding (#24), metric modeling (#25), agent-doc drift (#26), and
+the LangExtract experiment (#27–#28).
+
+One material gap remains only partially covered: typed properties with per-property
+evidence and confidence. Issue #5 provides a possible extension point, but a separate
+issue should be filed only after real client data demonstrates that free-form entity
+fields are causing review or consumer failures.
