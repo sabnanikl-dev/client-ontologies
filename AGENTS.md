@@ -86,6 +86,8 @@ Branch prefixes: `docs/issue-N`, `schema/issue-N`, `ontology/issue-N`, `scripts/
 
 Commit per logical change. PRs must include linked issue, summary of ontology/schema/tooling changes, documentation/spec updates made or why none were needed, evidence/source notes, validation commands run, generated artifacts included/excluded, and acceptance checklist.
 
+- Agent-facing docs (`CLAUDE.md`/`README.md`) updated when the file model, commands, or gates change.
+
 Self-review the diff before requesting review. Builders never merge their own PRs.
 
 Post-push: verify remote commit with `gh pr view <N> --json commits,headRefOid`. Post-merge: verify `merged: true` with `gh api repos/<owner>/<repo>/pulls/<N> --jq '{state, merged, merged_at, merge_commit_sha}'`.
