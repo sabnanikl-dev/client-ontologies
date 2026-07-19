@@ -1838,17 +1838,27 @@ Before merging an ontology change:
 
 ## 18. Open decisions
 
-These should become ADRs or follow-up issues before heavy implementation.
+> **Historical pre-implementation decisions — several already settled by shipped
+> behaviour.** This section records the original open questions from the pre-implementation
+> design. Where a decision has since been resolved by the live implementation, the
+> resolution is stated inline and the live contract prevails (see §12, §13, and §19); the
+> `Recommended v0` blocks below are the **original** recommendations, kept for history.
+> Items that remain genuinely open are marked **Proposed / not yet built**. Live
+> sequencing of remaining work is in [`docs/roadmap.md`](roadmap.md).
+
+These predate implementation and should not be read as current contract on their own;
+treat each recommendation as historical unless it is confirmed by a live section elsewhere
+in this spec.
 
 ### 18.1 Canonical repo and projection workflow
 
-Decision needed:
+Original decision needed:
 
 - Does `client-ontologies` become the only canonical ontology source?
 - Do client project folders keep copies?
 - Are repo projections generated into implementation repos by script or copied manually at first?
 
-Recommended v0:
+Original recommended v0:
 
 ```text
 client-ontologies = canonical ontology source
@@ -1856,31 +1866,45 @@ implementation repos = projection consumers
 wiki = narrative/context index
 ```
 
+**Resolution (live):** `client-ontologies` is the canonical source and projections are
+curated in-repo consumer views (§11); script-generated projections *into* implementation
+repos remain **Proposed** (see [`docs/roadmap.md`](roadmap.md)).
+
 ### 18.2 Database/export timing
 
-Decision needed:
+Original decision needed:
 
 - When does SQLite export become necessary?
 - When does Postgres become necessary?
 
-Recommended v0:
+Original recommended v0:
 
 ```text
 Do not add runtime DB until at least one consumer needs structured lookup beyond file reads.
 ```
 
+**Resolution (live):** the SQLite runtime export is **shipped** and is the current runtime
+projection — `scripts/export_sqlite.py` builds it and §12.2 documents its live schema, so
+the "do not add a runtime DB yet" recommendation above is superseded for SQLite. Postgres
+remains **Proposed** (§12.3).
+
 ### 18.3 Client handoff standard
 
-Decision needed:
+Original decision needed:
 
 - What qualifies a handoff doc as client-ready?
 - Who approves handoff docs before sharing?
 
-Recommended v0:
+Original recommended v0:
 
 ```text
 Handoff docs are generated/curated from ontology but require human review before sharing externally.
 ```
+
+**Status (live):** handoff generation/packaging is **Proposed / not yet built** — the
+shipped tooling produces no handoff export (§4.1, §13.1). The standing policy that any
+handoff must pass human review before external sharing still holds; the open questions
+above are tracked in [`docs/roadmap.md`](roadmap.md).
 
 ### 18.4 JMD inventory approval mechanism
 
