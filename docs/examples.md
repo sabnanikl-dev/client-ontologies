@@ -144,3 +144,63 @@ WHERE e.entity_id = 'femme-events.brand.voice';
 ```
 
 Consumer reminder: the SQLite database is a runtime export only. Update YAML first, validate, then regenerate SQLite.
+
+## Example 5 — Metric lookup for local-visibility outcomes
+
+Goal: a reporting consumer wants the Femme Events local-visibility outcome measures (GBP calls, direction requests, website clicks) so it knows what to track — without treating draft definitions as recorded results.
+
+1. Load the canonical module entity (YAML):
+
+```yaml
+entity: femme-events.visibility.metric.gbp-calls
+entity_type: metric
+status: draft
+source_confidence: draft
+public_facing: false
+fields:
+  definition: "Number of call actions on the GBP listing over a reporting window."
+  data_source: "Google Business Profile performance/insights, read-only api_readonly_snapshot when a snapshot is captured"
+  cadence: "monthly"
+  baseline: unknown
+  unit: count
+```
+
+2. Or list every metric for the client after export:
+
+```bash
+sqlite3 build/client-ontologies.sqlite \
+  "SELECT entity_id FROM entities WHERE client_id='femme-events' AND entity_type='metric';"
+```
+
+Expected rows (order may vary):
+
+```text
+femme-events.visibility.metric.gbp-calls
+femme-events.visibility.metric.gbp-direction-requests
+femme-events.visibility.metric.website-clicks
+```
+
+3. Read the metric definition and status from SQLite (the `idx_entities_client_type` index covers the `client_id`/`entity_type` filter):
+
+```sql
+SELECT entity_id, label, status, source_confidence,
+       json_extract(raw_json, '$.fields.baseline')   AS baseline,
+       json_extract(raw_json, '$.fields.cadence')     AS cadence,
+       json_extract(raw_json, '$.fields.data_source') AS data_source
+FROM entities
+WHERE client_id = 'femme-events'
+  AND entity_type = 'metric'
+ORDER BY entity_id;
+```
+
+4. See which GBP entity each metric measures:
+
+```sql
+SELECT subject AS metric, predicate, object AS measures
+FROM relationships
+WHERE client_id = 'femme-events'
+  AND predicate = 'measures'
+ORDER BY subject;
+```
+
+Consumer behavior: these metrics are `draft` with `baseline: unknown` — they define *what* to measure, not measured results. A consumer must not present them as achieved numbers, targets, or a baseline until a real read-only snapshot is captured and the entity is promoted with evidence.

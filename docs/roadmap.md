@@ -97,8 +97,9 @@ Exit gate:
 
 - Agent-facing guidance matches the current manifest, schema, validator, export, test,
   and CI reality.
-- The existing `metric` resource type has one evidence-backed, validated use rather than
-  remaining an unused schema possibility.
+- The existing `metric` resource type has one validator-compliant use — modeled honestly
+  against the evidence that exists (`draft`/`unknown` where the source names no baseline or
+  snapshot, evidence-cited where it does) rather than remaining an unused schema possibility.
 
 ### Phase 1 — Shared foundations and runtime v1
 
