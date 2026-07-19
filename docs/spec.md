@@ -1,9 +1,22 @@
 # Client Operating Ontology Spec v0.1
 
-> Status: Draft specification for review.  
+> Status: Normative v0.1 contract — kept mechanically aligned with the live implementation.\
 > Repository: `sabnanikl-dev/client-ontologies`  
 > Scope: Agent-agnostic client ontology authoring, validation, projection, runtime consumption, and handoff.  
-> Last researched: 2026-05-28.
+> Live YAML resource kinds: `client`, `ontology`, `ontology_module`, `projection`.\
+> Design history and the original source inventory that informed this spec live in
+> [`docs/research/initial-ontology-design.md`](research/initial-ontology-design.md);
+> forward-looking sequencing lives in [`docs/roadmap.md`](roadmap.md).
+
+**How to read this document.** It describes current, enforced repository behavior.
+Sections that describe not-yet-built capabilities are marked **Proposed** or
+**Trigger-gated**; absent such a marker, treat a statement as live contract. Inline
+YAML blocks that use short `client.workstream` or `CamelCase` identifiers are
+**illustrative shape sketches** — canonical live IDs follow
+[`docs/conventions.md`](conventions.md) (lowercase, `client-slug.workstream.object-name`),
+as shown in the live modules under `clients/` and in [`docs/examples.md`](examples.md).
+The four live resource kinds are exactly `client`, `ontology` (the per-client
+manifest), `ontology_module`, and `projection`.
 
 ---
 
@@ -191,151 +204,103 @@ Design implications:
 
 ---
 
-## 3. Verified source registry for this draft
+## 3. Source grounding
 
-The following sources were inspected for this spec. These are references for the spec itself, not a replacement for per-fact evidence in future ontology modules.
+This spec was grounded in the client source material and repositories inventoried
+during its original research pass. That inventory — verified GitHub repositories,
+Obsidian/wiki notes, local project documents, and observed Linear planning issues — is
+**historical context, not per-fact evidence**, and it has been relocated to
+[`docs/research/initial-ontology-design.md`](research/initial-ontology-design.md) so
+this document stays current. (The original inventory recorded this repository as empty;
+it has since been implemented, which is exactly why that observation now lives in the
+history file rather than here.)
 
-### 3.1 Repositories verified through GitHub
-
-- `sabnanikl-dev/client-ontologies`
-  - URL: `https://github.com/sabnanikl-dev/client-ontologies`
-  - Visibility: public
-  - State observed: empty repository / no initial commits yet
-- `sabnanikl-dev/Femme-Events-Website`
-  - URL: `https://github.com/sabnanikl-dev/Femme-Events-Website`
-  - Visibility: public
-  - Description observed: `Femme Website`
-  - Default branch: `main`
-- `sabnanikl-dev/Femme-visibility`
-  - URL: `https://github.com/sabnanikl-dev/Femme-visibility`
-  - Visibility: private
-  - Description observed: `will be used for femme visibility and reusable operations`
-  - Default branch: `main`
-- `sabnanikl-dev/jmd-6-holding-page-harness`
-  - URL: `https://github.com/sabnanikl-dev/jmd-6-holding-page-harness`
-  - Visibility: private
-  - Description observed: `JMD-6 holding page coding harness and spec`
-  - Default branch: `main`
-
-### 3.2 Obsidian/wiki sources inspected
-
-- `/Users/creator/obsidian-vault/hermes-brain/wiki/consultancy/clients/JMD/Client JMD Menswear.md`
-- `/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Overview.md`
-- `/Users/creator/obsidian-vault/hermes-brain/wiki/femme-events/Femme Events Brand Guide.md`
-
-### 3.3 Local project documents inspected
-
-- `/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/docs/research/inventory-backend-automation-plan.md`
-- `/Users/creator/projects/femme-events/visibility/Femme-visibility/docs/femme-events/local-seo-source-of-truth.md`
-- `/Users/creator/projects/Femme-Events-Website/README.md`
-- `/Users/creator/projects/Femme-Events-Website/AGENTS.md`
-- `/Users/creator/projects/femme-events/visibility/Femme-visibility/AGENTS.md`
-- `/Users/creator/projects/consultancy/JMD-Menswear/deliverables/JMD-Website/AGENTS.md`
-
-### 3.4 Linear issues inspected via GraphQL search
-
-Relevant issues observed:
-
-- `PAPI-68` — Create Femme Events client operating ontology v0
-- `PAPI-69` — Create ontology-management skill for client operating ontologies
-- `PAPI-70` — Audit Femme ontology source material and workstreams
-- `PAPI-71` — Author canonical Femme ontology YAML modules
-- `PAPI-72` — Create Femme website and visibility ontology projections
-- `JMD-30` — Create JMD Menswear client operating ontology v0
-- `JMD-23` — Build deterministic Google Drive to Sanity photo automation for JMD showroom images
-- `PAPI-44` — Task 0.3 — Create local SEO source of truth and claims guardrails
-- `PAPI-56` — Review and approve Femme local SEO source of truth
-- `JMD-20` — Verify JMD business data for landing page
-
-The current spec does not mutate Linear; it only records observed planning/history context.
+Canonical ontology facts do not inherit that inventory as evidence: each active,
+approved, or verified fact cites its own source in its module's `evidence_sources`
+registry, resolved by the validator (see §9). The spec does not read or mutate Linear;
+Linear references are planning history only.
 
 ---
 
 ## 4. Repository layout
 
-Recommended repository layout:
+Current repository layout (live):
 
 ```text
 client-ontologies/
   README.md
+  AGENTS.md                # process bible (roles, rules, gates, PR flow)
+  CLAUDE.md                # mechanical orientation (file model, commands, gates)
   docs/
-    spec.md
-    decisions/
-      ADR-0001-authoring-format.md
+    spec.md                # this normative contract
+    conventions.md
+    examples.md
+    roadmap.md             # live issue sequencing
+    research/
+      initial-ontology-design.md   # relocated design history + source inventory
   schemas/
-    ontology.schema.json
-    defs.schema.json
-    evidence.schema.json
-    rule.schema.json
+    ontology.schema.json   # umbrella: oneOf-dispatches by kind
+    defs.schema.json       # shared $defs: id/status/confidence
+    evidence.schema.json   # shared $defs: sources + evidence refs
+    rule.schema.json       # shared $defs: rule + machine_check
     client.schema.json
-    manifest.schema.json
+    manifest.schema.json   # the kind: ontology per-client manifest
     module.schema.json
     projection.schema.json
-  templates/
-    cms-website/
-      module.yaml
-      handoff.md
-    local-visibility/
-      module.yaml
-      handoff.md
-    inventory-image-automation/
-      module.yaml
-      handoff.md
-    wedding-event-services/
-      module.yaml
-    formalwear-retail-showroom/
-      module.yaml
+  scripts/
+    ontology_loader.py     # shared YAML parse + manifest-first enumeration
+    validate_ontology.py   # canonical gate: schema then cross-reference pass
+    check_rules.py         # machine_check guardrail engine (library + CLI)
+    export_sqlite.py       # runtime SQLite projection
+  tests/
+    run_fixtures.py        # invalid fixtures must fail validation
+    run_export.py          # valid fixture must validate + export
+    run_checks.py          # guardrail engine matching + exit semantics
+    fixtures/
+  .github/
+    workflows/
+      validate.yml         # CI: validate, export, and run all three test runners
   clients/
     femme-events/
       client.yaml
-      ontology.yaml
+      ontology.yaml        # manifest: entry point listing modules + projections
       modules/
+        brand.yaml
         website.yaml
-        cms.yaml
-        brand-content.yaml
         local-visibility.yaml
-        inquiry-ops.yaml
-        approvals.yaml
+        operations.yaml
       projections/
-        website-repo.yaml
-        visibility-repo.yaml
-        handoff.yaml
-      handoff/
-        glossary.md
-        website-maintenance.md
-        local-visibility-maintenance.md
-        cms-data-dictionary.md
+        agent-context.yaml
+        website-build.yaml
+        local-seo.yaml
     jmd-menswear/
       client.yaml
-      ontology.yaml
+      ontology.yaml        # manifest: entry point listing modules + projections
       modules/
-        website-showroom.yaml
+        brand.yaml
+        website.yaml
         inventory-images.yaml
-        local-visibility.yaml
-        approvals.yaml
-        reporting.yaml
-        content-engine.yaml
+        operations.yaml
       projections/
-        website-repo.yaml
-        inventory-automation.yaml
-        handoff.yaml
-      handoff/
-        glossary.md
-        inventory-workflow.md
-        website-maintenance.md
-        cms-data-dictionary.md
-  tools/
-    validate_ontology.py
-    generate_projection.py
-    generate_handoff.py
-    export_sqlite.py
+        agent-context.yaml
+        website-build.yaml
+        inventory-workflow.yaml
 ```
+
+> **Proposed / not yet built.** The original draft also sketched top-level `tools/`,
+> `templates/`, `docs/decisions/`, and per-client `handoff/` directories. None exist
+> today: tooling ships under `scripts/` (not `tools/`), and templates, ADR files, and
+> client-safe handoff packages remain open, trigger-gated ideas (handoff generation is
+> tracked in `docs/roadmap.md`). The superseded layout sketch is preserved in
+> [`docs/research/initial-ontology-design.md`](research/initial-ontology-design.md).
 
 ### 4.1 What belongs where
 
 #### `docs/`
 
-Spec, architectural decision records, contribution rules, and human-readable design notes.
+Spec (this normative contract), conventions, consumption examples, the live roadmap,
+and — under `docs/research/` — relocated design history. Architectural decision records
+(`docs/decisions/`) are a **proposed** future addition, not a current directory.
 
 #### `schemas/`
 
@@ -343,29 +308,25 @@ Machine-readable JSON Schemas for validating ontology files. These schemas are g
 
 The contract is split by resource `kind`: `client.schema.json`, `manifest.schema.json` (the `kind: ontology` per-client manifest), `module.schema.json`, and `projection.schema.json` dispatch off shared `$defs` in `defs.schema.json` (id/status/confidence), `evidence.schema.json` (sources and evidence references), and `rule.schema.json`. `ontology.schema.json` is the umbrella that `oneOf`-dispatches by kind. `scripts/validate_ontology.py` enforces the matching schema for each file (types, controlled-vocabulary enums, required identity fields, and `additionalProperties: false` — extensions must be `x_`-prefixed) *before* its repo-specific cross-reference and evidence checks. The validator ships a small dependency-free JSON Schema (draft 2020-12 subset) evaluator so the repo keeps no Python package requirements; negative fixtures in `tests/fixtures/` (run via `tests/run_fixtures.py`) prove malformed files are rejected.
 
-#### `templates/`
+#### `scripts/`
 
-Reusable domain/workstream templates that can be extended by clients.
-
-Examples:
-
-- `cms-website`
-- `local-visibility`
-- `inventory-image-automation`
-- `wedding-event-services`
-- `formalwear-retail-showroom`
+The live tooling: `ontology_loader.py` (shared manifest-first YAML enumeration used by
+both the validator and exporter), `validate_ontology.py` (the canonical gate),
+`check_rules.py` (the `machine_check` guardrail engine, importable and CLI), and
+`export_sqlite.py` (the runtime SQLite projection). All are stdlib-only and shell out to
+`ruby -e` for YAML parsing, so the repo carries no pip/gem dependencies.
 
 #### `clients/<client-id>/`
 
-Client-specific facts, rules, modules, and projections.
+Client-specific facts, rules, modules, and projections, entered through the client's
+`ontology.yaml` manifest.
 
-#### `clients/<client-id>/handoff/`
+#### **Proposed:** `templates/` and `clients/<client-id>/handoff/`
 
-Generated or curated client-facing documents. These must be safe to share after human review.
-
-#### `tools/`
-
-Optional scripts for validation, projection generation, handoff generation, and runtime export.
+Reusable domain/workstream templates and generated client-facing handoff documents were
+part of the original design sketch. They are **not implemented yet**. Handoff packaging
+(which must be safe to share only after human review) is tracked as an open issue in
+`docs/roadmap.md`; template scaffolding relates to the open new-client scaffolding issue.
 
 ---
 
@@ -402,9 +363,9 @@ workstreams:
   - id: local_visibility
     status: active
   - id: inventory_images
-    status: planned
+    status: proposed
   - id: content_engine
-    status: candidate
+    status: draft
   - id: reporting
     status: active
 ```
@@ -881,11 +842,17 @@ projection_target_types:
 
 ### 11.3 Projection rules
 
-- A projection must identify its source ontology commit or version.
+- **Proposed (not yet enforced):** A projection should identify the source ontology
+  commit or version it was built from. Live projections do not yet carry this
+  provenance; adding projection provenance and runtime version metadata is tracked as an
+  open issue in `docs/roadmap.md`.
 - A projection must be smaller than the canonical ontology.
 - A projection should include only the rules/entities needed by that repo/workflow/handoff.
 - A projection should not include private internal notes unless the target is explicitly internal.
-- Generated projections should be committed in the target repo only when they materially help future work.
+- Live projections are **hand-authored** curated slices validated against
+  `projection.schema.json`; deterministic projection *generation* is a proposed future
+  tool, not current behavior. Generated projections should be committed in a target repo
+  only when they materially help future work.
 
 ---
 
@@ -906,60 +873,72 @@ Use SQLite for local agent/script lookup when:
 - a workflow needs a portable single-file artifact;
 - no multi-user hosted app is needed.
 
-Example schema:
+`scripts/export_sqlite.py --output build/client-ontologies.sqlite` produces the live
+single-file database. It creates nine tables — `manifests`, `clients`, `modules`,
+`entities`, `relationships`, `rules`, `projections`, `sources`, and `evidence` — each row
+carrying a `raw_json` column with the full canonical object. The schema below is
+reproduced from the shipped `scripts/export_sqlite.py`; the three canonical-fact tables
+and the supporting indexes are shown verbatim:
 
 ```sql
-CREATE TABLE ontology_entities (
+CREATE TABLE entities (
   client_id TEXT NOT NULL,
   module_id TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
+  entity_id TEXT PRIMARY KEY,
   label TEXT NOT NULL,
   entity_type TEXT NOT NULL,
+  status TEXT,
+  source_confidence TEXT,
   public_facing INTEGER NOT NULL DEFAULT 0,
-  raw_json TEXT NOT NULL,
-  PRIMARY KEY (client_id, module_id, entity_id)
+  raw_json TEXT NOT NULL
 );
 
-CREATE TABLE ontology_relationships (
+CREATE TABLE relationships (
   client_id TEXT NOT NULL,
   module_id TEXT NOT NULL,
-  relationship_id TEXT NOT NULL,
+  relationship_id TEXT PRIMARY KEY,
   subject TEXT NOT NULL,
   predicate TEXT NOT NULL,
   object TEXT NOT NULL,
-  raw_json TEXT NOT NULL,
-  PRIMARY KEY (client_id, module_id, relationship_id)
+  source_confidence TEXT,
+  raw_json TEXT NOT NULL
 );
 
-CREATE TABLE ontology_rules (
+CREATE TABLE rules (
   client_id TEXT NOT NULL,
   module_id TEXT NOT NULL,
-  rule_id TEXT NOT NULL,
+  rule_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
   status TEXT NOT NULL,
   severity TEXT NOT NULL,
   rule_type TEXT NOT NULL,
   statement TEXT NOT NULL,
-  raw_json TEXT NOT NULL,
-  PRIMARY KEY (client_id, module_id, rule_id)
+  source_confidence TEXT,
+  raw_json TEXT NOT NULL
 );
 
-CREATE INDEX idx_rules_client_status ON ontology_rules(client_id, status);
-CREATE INDEX idx_entities_client_type ON ontology_entities(client_id, entity_type);
+CREATE INDEX idx_modules_client ON modules(client_id);
+CREATE INDEX idx_entities_client_type ON entities(client_id, entity_type);
+CREATE INDEX idx_rules_client_status ON rules(client_id, status);
+CREATE INDEX idx_rules_client_severity ON rules(client_id, severity);
+CREATE INDEX idx_evidence_item ON evidence(item_id);
 ```
 
-Example query:
+Example query against the live `rules` table:
 
 ```sql
 SELECT rule_id, severity, statement
-FROM ontology_rules
+FROM rules
 WHERE client_id = 'jmd-menswear'
   AND status IN ('active', 'approved')
   AND raw_json LIKE '%website_showroom%';
 ```
 
-### 12.3 Postgres runtime storage
+### 12.3 Postgres runtime storage — Proposed
 
-Use Postgres when:
+Postgres is a **proposed** future runtime store, not part of the current
+implementation. The only shipped runtime projection today is the SQLite export (§12.2).
+Consider Postgres when:
 
 - a hosted client portal needs ontology-backed behavior;
 - multiple users need concurrent updates;
@@ -1060,9 +1039,10 @@ export const showroomItem = defineType({
 })
 ```
 
-### 12.5 RDF/OWL/graph export
+### 12.5 RDF/OWL/graph export — Proposed
 
-RDF/OWL should be treated as an optional later export, not a v0 dependency.
+RDF/OWL is a **proposed** optional later export, not a v0 dependency and not
+implemented today.
 
 Use it when:
 
@@ -1091,6 +1071,13 @@ jmd:NoRawDrivePublishRule a co:BlockingRule ;
 
 ### 13.1 Minimum validator responsibilities
 
+> **Historical design intent, not the current enforced contract.** This list is the
+> original sketch of validator responsibilities; the authoritative behavior is whatever
+> `scripts/validate_ontology.py` actually enforces (schema shape via `schemas/`, ID
+> hygiene/uniqueness, evidence conditions, reference resolution, `regex_policy`
+> compilation, manifest membership, and secret/sensitive-field scanning). Items below
+> that the shipped validator does not implement are flagged **Proposed**.
+
 A validator should check:
 
 - YAML/JSON parse success;
@@ -1101,16 +1088,28 @@ A validator should check:
 - active/approved claims have evidence;
 - public-facing rules have either evidence or explicit draft status;
 - projections reference existing modules/rules/entities;
-- handoff exports do not include obvious private paths or secrets unless explicitly marked internal.
+- **Proposed (not implemented):** handoff exports do not include obvious private paths or
+  secrets unless explicitly marked internal — the shipped validator scans canonical YAML
+  for secret tokens and a fixed set of sensitive field names, but has no handoff-export
+  validation path (no handoff export is built yet — the `clients/<client-id>/handoff/`
+  layout is itself marked **Proposed** above).
 
-### 13.2 Python validator sketch
+> **Superseded by the shipped implementation.** The validator and JSON Schema code
+> blocks in §13.2 and §13.3 are the original design *sketches*. They are retained to
+> explain intent, but the live, authoritative implementation is
+> `scripts/validate_ontology.py` (built on the shared `scripts/ontology_loader.py`) and
+> the eight files under `schemas/`. Where a sketch and the shipped code differ, the
+> shipped code wins; do not treat these snippets as the current contract.
+
+### 13.2 Python validator sketch (historical)
 
 ```python
 #!/usr/bin/env python3
 """Validate client ontology modules.
 
-This is a sketch for docs/spec.md. The production version should live in
-`tools/validate_ontology.py` and load JSON Schemas from `schemas/`.
+This is a sketch for docs/spec.md. The shipped implementation lives in
+`scripts/validate_ontology.py` (not the originally proposed `tools/` path) and loads
+JSON Schemas from `schemas/`.
 """
 from __future__ import annotations
 
@@ -1203,7 +1202,11 @@ if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1] if len(sys.argv) > 1 else "."))
 ```
 
-### 13.3 JSON Schema sketch
+### 13.3 JSON Schema sketch (historical)
+
+The single-file schema below predates the delivered contract, which is **split by
+`kind`** across `schemas/` (see §4.1) rather than kept as one module schema. It is kept
+only to show the original shape.
 
 ```json
 {
@@ -1835,17 +1838,27 @@ Before merging an ontology change:
 
 ## 18. Open decisions
 
-These should become ADRs or follow-up issues before heavy implementation.
+> **Historical pre-implementation decisions — several already settled by shipped
+> behaviour.** This section records the original open questions from the pre-implementation
+> design. Where a decision has since been resolved by the live implementation, the
+> resolution is stated inline and the live contract prevails (see §12, §13, and §19); the
+> `Recommended v0` blocks below are the **original** recommendations, kept for history.
+> Items that remain genuinely open are marked **Proposed / not yet built**. Live
+> sequencing of remaining work is in [`docs/roadmap.md`](roadmap.md).
+
+These predate implementation and should not be read as current contract on their own;
+treat each recommendation as historical unless it is confirmed by a live section elsewhere
+in this spec.
 
 ### 18.1 Canonical repo and projection workflow
 
-Decision needed:
+Original decision needed:
 
 - Does `client-ontologies` become the only canonical ontology source?
 - Do client project folders keep copies?
 - Are repo projections generated into implementation repos by script or copied manually at first?
 
-Recommended v0:
+Original recommended v0:
 
 ```text
 client-ontologies = canonical ontology source
@@ -1853,31 +1866,45 @@ implementation repos = projection consumers
 wiki = narrative/context index
 ```
 
+**Resolution (live):** `client-ontologies` is the canonical source and projections are
+curated in-repo consumer views (§11); script-generated projections *into* implementation
+repos remain **Proposed** (see [`docs/roadmap.md`](roadmap.md)).
+
 ### 18.2 Database/export timing
 
-Decision needed:
+Original decision needed:
 
 - When does SQLite export become necessary?
 - When does Postgres become necessary?
 
-Recommended v0:
+Original recommended v0:
 
 ```text
 Do not add runtime DB until at least one consumer needs structured lookup beyond file reads.
 ```
 
+**Resolution (live):** the SQLite runtime export is **shipped** and is the current runtime
+projection — `scripts/export_sqlite.py` builds it and §12.2 documents its live schema, so
+the "do not add a runtime DB yet" recommendation above is superseded for SQLite. Postgres
+remains **Proposed** (§12.3).
+
 ### 18.3 Client handoff standard
 
-Decision needed:
+Original decision needed:
 
 - What qualifies a handoff doc as client-ready?
 - Who approves handoff docs before sharing?
 
-Recommended v0:
+Original recommended v0:
 
 ```text
 Handoff docs are generated/curated from ontology but require human review before sharing externally.
 ```
+
+**Status (live):** handoff generation/packaging is **Proposed / not yet built** — the
+shipped tooling produces no handoff export (§4.1, §13.1). The standing policy that any
+handoff must pass human review before external sharing still holds; the open questions
+above are tracked in [`docs/roadmap.md`](roadmap.md).
 
 ### 18.4 JMD inventory approval mechanism
 
@@ -1893,50 +1920,21 @@ Until those are resolved, the JMD inventory module should remain draft/proposed 
 
 ---
 
-## 19. Initial implementation plan after this spec
+## 19. Implementation status and forward sequencing
 
-This is not yet execution approval. It is the recommended next sequence.
+The spec's original phased build-out is **largely delivered**: the split schemas, the
+validator, the manifest-first loader, the SQLite exporter, the machine-check engine, the
+Femme and JMD v0 ontologies, and their projections all exist today (with a leaner,
+workstream-oriented module split than the first sketch proposed). Projection generation
+and client-safe handoff packaging remain open.
 
-### Phase 1 — Repository foundation
+- The **original phased plan** (with per-phase delivered/superseded annotations) is
+  preserved in [`docs/research/initial-ontology-design.md`](research/initial-ontology-design.md).
+- The **live, authoritative sequencing** of remaining open work — hard dependencies,
+  recommended ordering, and trigger gates — is in [`docs/roadmap.md`](roadmap.md).
+  GitHub Issues remain the implementation contracts.
 
-- Add `schemas/` with initial JSON Schemas.
-- Add `tools/validate_ontology.py`.
-- Add `templates/` for `cms-website`, `local-visibility`, and `inventory-image-automation`.
-- Add a no-secret validation check.
-
-### Phase 2 — Femme v0 ontology
-
-- Add `clients/femme-events/client.yaml`.
-- Add modules:
-  - `website.yaml`
-  - `cms.yaml`
-  - `brand-content.yaml`
-  - `local-visibility.yaml`
-  - `approvals.yaml`
-- Add projections:
-  - `website-repo.yaml`
-  - `visibility-repo.yaml`
-  - `handoff.yaml`
-
-### Phase 3 — JMD v0 ontology
-
-- Add `clients/jmd-menswear/client.yaml`.
-- Add modules:
-  - `website-showroom.yaml`
-  - `inventory-images.yaml`
-  - `local-visibility.yaml`
-  - `approvals.yaml`
-  - `reporting.yaml`
-- Add projections:
-  - `website-repo.yaml`
-  - `inventory-automation.yaml`
-  - `handoff.yaml`
-
-### Phase 4 — Projection and handoff generation
-
-- Generate repo-specific projections into `clients/*/projections/`.
-- Generate curated handoff docs into `clients/*/handoff/`.
-- Do not copy projections into client implementation repos until reviewed.
+This spec no longer carries a forward execution plan of its own; consult the roadmap.
 
 ---
 
