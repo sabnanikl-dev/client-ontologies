@@ -40,6 +40,9 @@ client-ontologies/
     spec.md
     conventions.md
     examples.md
+    roadmap.md             # live open-issue sequencing (planning, not canonical)
+    research/
+      initial-ontology-design.md   # relocated design history + source inventory
   schemas/
     ontology.schema.json
     defs.schema.json
