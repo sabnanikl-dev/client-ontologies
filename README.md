@@ -9,6 +9,7 @@ This repo is the canonical v0.1 YAML source of truth for client ontology facts a
 Implemented v0.1 foundation:
 
 - `schemas/` — JSON Schema contract, split by resource kind (`client`, `manifest`, `module`, `projection`) over shared `$defs` (`defs`, `evidence`, `rule`); `ontology.schema.json` is the umbrella dispatcher.
+- `scripts/ontology_loader.py` — the single canonical YAML-reading entry point: `parse_yaml(path)`, manifest-first `iter_yaml(root)`, and `load_documents(root)`. Both the validator and exporter import it, so they parse files the same way and enumerate the same file set. Dependency-free (Ruby stdlib YAML).
 - `scripts/validate_ontology.py` — deterministic validator: enforces the per-kind JSON Schema first, then canonical cross-file reference and evidence rules.
 - `tests/run_fixtures.py` — proves invalid fixtures (`tests/fixtures/`) are rejected for the expected reason.
 - `scripts/export_sqlite.py` — optional runtime export into SQLite after YAML validates.
@@ -47,6 +48,7 @@ client-ontologies/
     module.schema.json
     projection.schema.json
   scripts/
+    ontology_loader.py     # shared YAML parse + manifest-first enumeration
     validate_ontology.py
     export_sqlite.py
   tests/
@@ -145,8 +147,11 @@ YAML remains canonical. Use SQLite only as a local runtime projection for agents
 python3 scripts/export_sqlite.py --output build/client-ontologies.sqlite
 ```
 
-The export creates tables for:
+The exporter enumerates files through the same shared loader as the validator
+(manifests first), so it exports the exact file set the validator gates on. The
+export creates tables for:
 
+- `manifests`
 - `clients`
 - `modules`
 - `entities`

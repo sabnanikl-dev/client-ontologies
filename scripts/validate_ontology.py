@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Deterministic validator for client ontology YAML files.
 
-Uses Ruby's stdlib YAML parser so the repo does not require PyYAML/jsonschema.
+YAML parsing and file enumeration live in scripts/ontology_loader.py (the single
+canonical YAML-reading entry point) so this script and the exporter stay in sync.
 The JSON Schema in schemas/ontology.schema.json documents the contract; this
 script enforces repo-specific cross-reference and evidence rules.
 """
@@ -9,11 +10,12 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Any
+
+from ontology_loader import iter_yaml, parse_yaml
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 PUBLIC_OR_ENFORCED_STATUSES = {"active", "approved", "owner_reviewed_internal", "prohibited"}
@@ -179,27 +181,6 @@ def schema_validate(path: Path, data: dict[str, Any], registry: dict[str, dict],
         errors.append(f"{path}: schema {schema_id} not found in schemas/")
         return
     _check_schema(data, root, registry, root, "", errors)
-
-
-def parse_yaml(path: Path) -> dict[str, Any]:
-    code = "require 'yaml'; require 'json'; obj = YAML.load_file(ARGV[0]); puts JSON.generate(obj)"
-    result = subprocess.run(["ruby", "-e", code, str(path)], text=True, capture_output=True)
-    if result.returncode != 0:
-        raise ValueError(result.stderr.strip() or result.stdout.strip())
-    data = json.loads(result.stdout or "{}")
-    if not isinstance(data, dict):
-        raise ValueError("root must be a mapping")
-    return data
-
-
-def iter_yaml(root: Path) -> list[Path]:
-    # Manifests load first so they are the entry point that pins module/projection membership.
-    return [
-        *sorted(root.glob("clients/*/ontology.yaml")),
-        *sorted(root.glob("clients/*/client.yaml")),
-        *sorted(root.glob("clients/*/modules/*.yaml")),
-        *sorted(root.glob("clients/*/projections/*.yaml")),
-    ]
 
 
 def evidence_refs(value: Any):
