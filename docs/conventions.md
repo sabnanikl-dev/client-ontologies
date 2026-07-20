@@ -89,6 +89,72 @@ Never vendor raw private exports, credentials, unnecessary PII, or a full privat
 
 Keep modules small. If a module becomes hard to review, split by workstream rather than adding nested complexity.
 
+## Relationship predicates
+
+Relationship `predicate` is a **controlled vocabulary** enforced by the schema
+enum (`schemas/module.schema.json` `$defs.predicateName`). A typo like
+`governs_by` fails validation instead of silently drifting into consumers. Two
+optional annotations refine a relationship further:
+
+- `cardinality` — one of `one_to_one`, `one_to_many`, `many_to_one`,
+  `many_to_many`, `unknown`. Never required; add it only where the arity is
+  evidence-clear.
+- `inverse` — the reverse-direction predicate name for future graph/UI
+  consumers (e.g. `governed_by` ⇄ `governs`). Its value **must itself be a
+  vocabulary predicate** (same enum); an arbitrary string is rejected.
+
+**Adding a new predicate is deliberate friction: it requires a schema PR** that
+extends the enum (and updates this table). This keeps the graph vocabulary small
+and reviewed rather than accreting per-client synonyms.
+
+**Domain/range:** a bounded, high-confidence subset carries subject/object type
+constraints in `scripts/validate_ontology.py` `PREDICATE_CONSTRAINTS`; the
+resolved endpoint `entity_type` is checked against the allowed set. Predicates
+marked *unconstrained* are vocabulary-checked only. `tests/run_predicates.py`
+(and a runtime self-check in the validator) guarantees every constrained key and
+every live `inverse` name stays inside the schema enum.
+
+| Predicate | Meaning | Typical inverse | Allowed subject types | Allowed object types |
+| --- | --- | --- | --- | --- |
+| `contains` | Subject is a container holding the object | — | `system_resource` | *unconstrained* |
+| `uses` | Subject draws on / consumes the object | — | *unconstrained* | *unconstrained* |
+| `creates` | Subject produces the object | — | *unconstrained* | *unconstrained* |
+| `creates_or_updates` | Subject creates or updates the object | — | *unconstrained* | *unconstrained* |
+| `overrides` | Subject supersedes the object | — | *unconstrained* | *unconstrained* |
+| `merges_with` | Subject merges into/with the object | — | *unconstrained* | *unconstrained* |
+| `renders_in` | Subject is presented within the object | `contains` | *unconstrained* | *unconstrained* |
+| `appears_on` | Subject is surfaced on the object | — | *unconstrained* | *unconstrained* |
+| `requires_approval_from` | Subject needs sign-off from the object | — | *unconstrained* | *unconstrained* |
+| `governed_by` | Subject is constrained by the object | `governs` | *unconstrained* | `governance_object` |
+| `governs` | Subject constrains the object | `governed_by` | *unconstrained* | *unconstrained* |
+| `measures` | Subject (a metric) quantifies the object | — | `metric` | *unconstrained* |
+| `sourced_from` | Subject originates from the object | — | *unconstrained* | *unconstrained* |
+| `stored_in` | Subject is persisted in the object | — | *unconstrained* | *unconstrained* |
+| `synchronized_by` | Subject is kept in sync by the object | — | *unconstrained* | *unconstrained* |
+| `archived_by` | Subject is archived by the object | — | *unconstrained* | *unconstrained* |
+| `supports` | Subject enables/backs the object | — | *unconstrained* | *unconstrained* |
+| `targets` | Subject is aimed at the object | — | *unconstrained* | *unconstrained* |
+| `must_match` | Subject must be consistent with the object | — | *unconstrained* | *unconstrained* |
+
+The *Typical inverse* column is a modeling hint; only `cardinality`/`inverse`
+values actually written into a relationship are validated. Constrained rows
+(`contains`, `governed_by`, `measures`) reflect semantics already true of every
+live relationship — they are intentionally narrow, not an OWL-style class layer.
+
+### Experimental predicates: the `x_` escape
+
+To trial a predicate before committing it to the vocabulary, prefix it with
+`x_` (e.g. `x_amplifies`). The schema accepts any `^x_`-prefixed string via the
+`predicate` `anyOf` branch, exactly like the `x_` field-extension escape
+elsewhere. Behavior of an `x_` predicate:
+
+- it bypasses the controlled enum (it is *not* one of the reviewed vocabulary
+  terms), so it carries no domain/range constraints and is never a `PREDICATE_CONSTRAINTS` key;
+- it is **not** a valid `inverse` value — `inverse` accepts vocabulary predicates
+  only, so an experiment cannot be pointed at as a canonical reverse name;
+- promote it to a real enum member (a schema PR) once it stabilises, the same
+  lifecycle as an `x_`-prefixed field.
+
 ## Approval boundaries
 
 Agents and automations may draft, reconcile, validate, and recommend from ontology content. They must not publish, mutate public accounts, send client-facing messages, or change live sites/accounts unless a human approval record covers that exact action and scope.

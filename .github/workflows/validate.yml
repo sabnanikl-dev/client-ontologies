@@ -31,6 +31,9 @@ jobs:
       - name: Run invalid-fixture regression tests
         run: python3 tests/run_fixtures.py
 
+      - name: Run predicate-vocabulary sync tests
+        run: python3 tests/run_predicates.py
+
       - name: Run valid-fixture validate + export tests
         run: python3 tests/run_export.py
 

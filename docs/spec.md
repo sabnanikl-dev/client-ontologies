@@ -517,6 +517,12 @@ Relationships should be practical and implementation-useful.
 
 ### 7.1 Relationship object shape
 
+**Implemented.** `subject`, `predicate`, `object`, and `source_confidence` are
+required; `cardinality`, `inverse`, `description`, `workstreams`, and `evidence`
+are optional. `predicate` and `inverse` are drawn from the controlled vocabulary
+(§7.3); `cardinality` is one of `one_to_one`, `one_to_many`, `many_to_one`,
+`many_to_many`, `unknown`.
+
 ```yaml
 relationships:
   - id: jmd.image.creates_sanity_asset
@@ -526,6 +532,7 @@ relationships:
     workstreams:
       - inventory_images
     cardinality: many_to_one
+    inverse: sourced_from
     description: "An approved inventory image may create or update a Sanity asset for website delivery."
     evidence:
       - source_id: jmd-inventory-plan
@@ -545,28 +552,57 @@ triples:
 
 ### 7.3 Relationship predicates
 
-Recommended generic predicates:
+**Implemented as a controlled vocabulary.** `predicate` is a schema enum
+(`schemas/module.schema.json` `$defs.predicateName`), seeded from the generic set
+below plus every predicate live in `clients/*/modules`. An unknown predicate
+fails validation; adding one is a deliberate schema PR (see
+`docs/conventions.md` for the full predicate table with meanings, inverses, and
+domain/range).
 
 ```yaml
 predicates:
+  - appears_on
+  - archived_by
   - contains
-  - uses
   - creates
   - creates_or_updates
-  - overrides
-  - merges_with
-  - renders_in
-  - appears_on
-  - requires_approval_from
   - governed_by
+  - governs
+  - measures
+  - merges_with
+  - must_match
+  - overrides
+  - renders_in
+  - requires_approval_from
   - sourced_from
   - stored_in
-  - synchronized_by
-  - archived_by
   - supports
+  - synchronized_by
   - targets
-  - must_match
+  - uses
 ```
+
+**Experimental escape:** a predicate prefixed with `x_` (e.g. `x_amplifies`)
+bypasses the enum for trialling, mirroring the `x_` field-extension escape. An
+`x_` predicate carries no domain/range constraints and is not a valid `inverse`
+value; promote it to a real enum member once it stabilises.
+
+**Bounded domain/range (semantic validation).** Beyond the enum, a small,
+high-confidence subset in `scripts/validate_ontology.py` `PREDICATE_CONSTRAINTS`
+pins the allowed subject/object `entity_type`. The cross-reference pass resolves
+each endpoint and rejects a mismatch. Current constraints — each reflecting
+semantics already true of every live relationship, deliberately *not* an
+OWL-style class hierarchy or disjointness layer:
+
+| Predicate | Constraint |
+| --- | --- |
+| `measures` | subject `entity_type` must be `metric` |
+| `governed_by` | object `entity_type` must be `governance_object` |
+| `contains` | subject `entity_type` must be `system_resource` |
+
+Predicates outside this subset stay vocabulary-checked only. A deterministic
+sync guard (`tests/run_predicates.py` plus a validator self-check) fails if any
+constraint key or live `inverse` name leaves the schema enum.
 
 ---
 

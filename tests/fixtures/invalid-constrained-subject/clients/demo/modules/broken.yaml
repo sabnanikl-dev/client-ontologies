@@ -1,0 +1,33 @@
+# Invalid fixture: the `measures` predicate constrains its subject to entity_type
+# `metric` (PREDICATE_CONSTRAINTS). Here the subject resolves to a brand_object,
+# so the bounded domain/range check must reject it.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.metrics
+title: "Demo metrics"
+client_id: demo
+status: active
+workstreams: [metrics]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.metrics.voice
+    label: "Voice"
+    entity_type: brand_object
+    description: "Not a metric."
+    source_confidence: draft
+  - id: demo.metrics.profile
+    label: "Profile"
+    entity_type: system_resource
+    description: "A measured system resource."
+    source_confidence: draft
+relationships:
+  - id: demo.metrics.voice-measures-profile
+    subject: demo.metrics.voice
+    predicate: measures
+    object: demo.metrics.profile
+    source_confidence: draft
+rules: []

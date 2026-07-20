@@ -32,9 +32,12 @@ entities:
       - source_id: demo-core-src
         note: "Venue concept."
 relationships:
+  # `x_held_at` exercises the experimental predicate escape: an `^x_`-prefixed
+  # term bypasses the controlled enum and validates (positive counterpart to the
+  # bad-predicate fixture, where a non-`x_` unknown term fails).
   - id: demo.core.event-at-venue
     subject: demo.core.event
-    predicate: held_at
+    predicate: x_held_at
     object: demo.core.venue
     source_confidence: inferred
     evidence:

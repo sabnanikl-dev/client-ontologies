@@ -1,0 +1,33 @@
+# Invalid fixture: `predicate` uses a term outside the controlled vocabulary and
+# is not an `x_`-prefixed experiment, so the schema enum (anyOf) rejects it.
+# A typo like `governs_by` must fail rather than silently validate.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.brand.voice
+    label: "Voice"
+    entity_type: brand_object
+    description: "Brand voice."
+    source_confidence: draft
+  - id: demo.brand.palette
+    label: "Palette"
+    entity_type: brand_object
+    description: "Brand palette."
+    source_confidence: draft
+relationships:
+  - id: demo.brand.voice-governs-by-palette
+    subject: demo.brand.voice
+    predicate: governs_by
+    object: demo.brand.palette
+    source_confidence: draft
+rules: []
