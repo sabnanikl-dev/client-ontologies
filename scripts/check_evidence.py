@@ -6,18 +6,26 @@ but most citations point at an absolute local path on one machine with a bare
 line range. This tool makes citations *verifiable*: where a citation carries a
 `content_hash` anchor (added on `evidenceRef` by schemas/evidence.schema.json), it
 re-hashes the cited span and reports whether the source still matches, drifted, or
-cannot be resolved in the current environment.
+cannot be resolved in the current environment. It also reports, independently, the
+existence health of every registry source that declares a `path` — including
+sources no citation references.
 
 Design goals (issue #23):
 
   * Stdlib only. Reuses scripts/ontology_loader.py for YAML parsing and file
     enumeration, so it inspects exactly the canonical file set the validator
     gates on (Ruby must be on PATH — see CLAUDE.md).
-  * Portable. Only repo-relative sources (relative paths, or absolute paths that
-    resolve *inside* the repo root) are truly verifiable across machines/CI.
-    External absolute paths (`/Users/creator/...`) that are not available in the
-    current environment are reported ``unresolvable_in_environment`` and stay
-    advisory — never collapsed into a false ``verified_match``.
+  * Portable vs environment-local. Only repo-relative sources (relative paths, or
+    absolute paths that resolve *inside* the repo root) are verifiable *portably*
+    (any checkout/CI). An external absolute path (`/Users/creator/...`) is only ever
+    verified *environment-locally*: if it is available here it is hashed and
+    reported with ``scope: environment_local`` (never claimed as a portable/CI
+    guarantee); if it is unavailable it is ``unresolvable_in_environment`` and stays
+    advisory. Either way an unreadable external source is never a false pass.
+  * Two levels, never conflated. Source existence (per path-bearing registry
+    source) and citation anchor health (per evidence ref) are reported and summed
+    separately, so an uncited-but-declared source is still visible and citation
+    counts are never inflated by source-existence rows.
   * Deterministic. Human and JSON output are stable (results sorted); no clocks,
     no randomness.
 
@@ -41,34 +49,56 @@ A line-ending-only change therefore does not create false drift. Future
 normalization behavior must use a *new* version tag rather than silently changing
 existing hashes; an unrecognized algorithm/version is ``unsupported_hash_version``.
 
-## Result categories (issue #23 contract)
+## Result levels and categories (issue #23 contract)
 
-Every citation (one ``evidence`` ref) is classified into exactly one category:
+The report has two independent levels so source health and citation health are
+never conflated.
 
-  * ``verified_match``               — anchor present, source resolved, hash matches.
-  * ``content_drift``               — anchor present, source resolved, hash differs.
-  * ``source_missing``              — a repo-relative source file does not exist.
-  * ``anchor_missing``              — source resolvable but the citation has no
-                                      ``content_hash`` to verify against.
-  * ``invalid_range``               — ``lines`` is missing/malformed/out of bounds
-                                      for a citation carrying a ``content_hash``.
-  * ``unsupported_hash_version``    — ``content_hash`` is not ``sha256:utf8-lf-v1:``
-                                      + 64 hex (a static data defect; schema also
-                                      rejects it, so this is a robustness backstop).
-  * ``unresolvable_in_environment`` — an external absolute path (or path escaping
-                                      the repo) that is not available here; advisory.
+*Source level* — one row per registry source that declares a ``path`` (whether or
+not any citation references it), so an uncited-but-declared source is still visible:
+
+  * ``present``  — the path resolves to a file. Repo-relative paths are present
+                   *portably* (any checkout/CI); an external absolute path that
+                   happens to exist here is present *environment-locally* only
+                   (``scope: environment_local``, advisory for portability).
+  * ``missing``  — a repo-relative path does not exist (a genuine, portable defect).
+  * ``unavailable_in_environment`` — an external absolute path (or a path escaping
+                   the repo) that is not available here; advisory, never a failure.
+
+*Citation level* — one row per ``evidence`` ref, classified into exactly one:
+
+  * ``verified_match``  — anchor present, source resolved, hash matches. Carries a
+                          ``scope``: ``portable`` (repo-relative) or
+                          ``environment_local`` (an available external absolute
+                          path — verified *here* only, not portably/in CI).
+  * ``content_drift``   — anchor present, source resolved, hash differs (same
+                          ``scope`` distinction).
+  * ``source_missing``  — a repo-relative source file does not exist.
+  * ``anchor_missing``  — source resolvable but the citation has no ``content_hash``.
+  * ``invalid_range``   — ``lines`` missing/malformed/out of bounds for an anchored
+                          citation.
+  * ``unsupported_hash_version`` — ``content_hash`` is not ``sha256:utf8-lf-v1:`` +
+                          64 hex (schema also rejects it; this is a backstop).
+  * ``unresolvable_in_environment`` — an external absolute path (or path escaping the
+                          repo) unavailable here; advisory.
+
+Verification scope is explicit on every resolved source/citation row: only
+repo-relative sources are verified *portably*. An available external absolute path
+is verified *environment-locally* (``scope: environment_local``) and that
+distinction is preserved in the human report, the JSON, and the docs — the tool
+never claims a portable/CI guarantee it cannot make.
 
 ## Exit behavior (precise)
 
   * exit 0 — a report ran and either ``--strict`` was not given, or ``--strict``
              found no genuine-failure category.
-  * exit 1 — ``--strict`` and at least one citation is a genuine failure:
-             ``content_drift``, ``source_missing``, ``invalid_range``, or
-             ``unsupported_hash_version``. ``anchor_missing`` and
-             ``unresolvable_in_environment`` never trip a non-zero exit — external
-             unreachable sources stay advisory, so the CI step is non-blocking for
-             non-resolvable paths.
-  * exit 2 — usage error (unknown client, unreadable root, bad arguments).
+  * exit 1 — ``--strict`` and at least one genuine failure. Citation failures:
+             ``content_drift``, ``source_missing``, ``invalid_range``,
+             ``unsupported_hash_version``. Source failures: ``missing``. Advisory
+             categories (citation ``anchor_missing`` / ``unresolvable_in_environment``
+             and source ``unavailable_in_environment``) never trip a non-zero exit,
+             so the CI step is non-blocking for owner-only external paths.
+  * exit 2 — usage error (unknown ``--client``, unreadable root, bad arguments).
 """
 from __future__ import annotations
 
@@ -93,16 +123,17 @@ CONTENT_HASH_RE = re.compile(r"^sha256:utf8-lf-v1:[0-9a-f]{64}$")
 # Generic shape used to *classify* an anchor as unsupported vs malformed.
 GENERIC_HASH_RE = re.compile(r"^(?P<algo>[a-z0-9]+):(?P<version>[a-z0-9._-]+):(?P<hex>[0-9a-fA-F]+)$")
 
+# --- Citation level ---------------------------------------------------------- #
 # Categories whose presence makes --strict exit non-zero. Advisory categories
 # (anchor_missing, unresolvable_in_environment) and passes (verified_match) do not.
-STRICT_FAILURE_CATEGORIES = {
+CITATION_STRICT_FAILURES = {
     "content_drift",
     "source_missing",
     "invalid_range",
     "unsupported_hash_version",
 }
 # Stable ordering for the human summary and JSON summary maps.
-ALL_CATEGORIES = [
+ALL_CITATION_CATEGORIES = [
     "verified_match",
     "content_drift",
     "source_missing",
@@ -110,6 +141,16 @@ ALL_CATEGORIES = [
     "invalid_range",
     "unsupported_hash_version",
     "unresolvable_in_environment",
+]
+
+# --- Source level ------------------------------------------------------------ #
+# Only a genuinely missing repo-relative source gates; an unavailable external
+# path stays advisory (owner-only paths must not fail CI).
+SOURCE_STRICT_FAILURES = {"missing"}
+ALL_SOURCE_CATEGORIES = [
+    "present",
+    "missing",
+    "unavailable_in_environment",
 ]
 
 
@@ -216,10 +257,10 @@ def classify_path(src_path: str, repo_root: Path) -> tuple[str, Path]:
     """Classify a source ``path`` as ``"repo"`` or ``"external"`` and resolve it.
 
     * A relative path resolves against ``repo_root``; if it stays inside the repo
-      it is ``"repo"`` (truly verifiable across machines), otherwise ``"external"``.
+      it is ``"repo"`` (verifiable portably across machines), otherwise ``"external"``.
     * An absolute path that resolves inside ``repo_root`` is ``"repo"``; one that
       resolves outside (``/Users/creator/...`` etc.) is ``"external"`` and only
-      advisory here.
+      verifiable environment-locally here.
     """
     repo_root = repo_root.resolve()
     p = Path(src_path)
@@ -234,16 +275,56 @@ def classify_path(src_path: str, repo_root: Path) -> tuple[str, Path]:
     return ("repo" if inside else "external", candidate)
 
 
+def _scope_for(kind: str) -> str:
+    """Verification scope for a resolved source: portable vs environment-local."""
+    return "portable" if kind == "repo" else "environment_local"
+
+
+# --------------------------------------------------------------------------- #
+# Source-level classification (existence health of each path-bearing source).
+# --------------------------------------------------------------------------- #
+def classify_source(source: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    """Classify the existence of one registry source that declares a ``path``.
+
+    Independent of any citation: a repo-relative path present anywhere in a
+    checkout is portably present; an available external absolute path is present
+    environment-locally only; a missing repo-relative path is a genuine defect; an
+    unavailable external path stays advisory. Callers must only pass path-bearing
+    sources (non-file sources have nothing to check at this level).
+    """
+    path = str(source.get("path"))
+    kind, resolved = classify_path(path, repo_root)
+    # Existence — not file-ness — is the source-level contract: a directory used as
+    # a provenance pointer (e.g. a projection citing its client dir) exists and is
+    # therefore ``present``. Hash-verification of a specific span is a citation-level
+    # concern handled by check_citation.
+    if resolved.exists():
+        scope = _scope_for(kind)
+        what = "directory" if resolved.is_dir() else "file"
+        if kind == "repo":
+            detail = f"repo-relative source {what} present (portably verifiable): {path}"
+        else:
+            detail = (f"external source {what} present in this environment only "
+                      f"(environment-local, advisory for portability): {path}")
+        return {"category": "present", "scope": scope, "detail": detail}
+    if kind == "external":
+        return {"category": "unavailable_in_environment", "scope": "environment_local",
+                "detail": f"external source not available in this environment (advisory): {path}"}
+    return {"category": "missing", "scope": "portable",
+            "detail": f"repo-relative source path does not exist: {path}"}
+
+
 # --------------------------------------------------------------------------- #
 # Core per-citation classification.
 # --------------------------------------------------------------------------- #
 def check_citation(ref: dict[str, Any], source: Optional[dict[str, Any]], repo_root: Path) -> dict[str, Any]:
     """Classify one evidence ref against its resolved source registry entry.
 
-    Returns a result dict with at least ``category`` and ``detail``. Precedence
-    (first match wins) is documented in the module docstring; the ordering keeps
-    static data defects (unsupported hash) visible and external-unreachable
-    sources advisory rather than falsely verified.
+    Returns a result dict with at least ``category`` and ``detail`` (and ``scope``
+    on resolved verify/drift outcomes). Precedence (first match wins) is documented
+    in the module docstring; the ordering keeps static data defects (unsupported
+    hash) visible and external-unreachable sources advisory rather than falsely
+    verified.
     """
     content_hash = ref.get("content_hash")
     lines = ref.get("lines")
@@ -269,6 +350,8 @@ def check_citation(ref: dict[str, Any], source: Optional[dict[str, Any]], repo_r
 
     kind, resolved = classify_path(str(path), repo_root)
     exists = resolved.is_file()
+    scope = _scope_for(kind)
+    env_note = "" if kind == "repo" else " (environment-local: external path verified here only, not portably/in CI)"
 
     # B. Path resolution.
     if kind == "external" and not exists:
@@ -301,9 +384,10 @@ def check_citation(ref: dict[str, Any], source: Optional[dict[str, Any]], repo_r
         return {"category": "invalid_range", "detail": f"cannot select lines {lines!r}: {exc}"}
 
     if actual == content_hash:
-        return {"category": "verified_match", "detail": f"hash matches for lines {lines}"}
-    return {"category": "content_drift",
-            "detail": f"hash mismatch for lines {lines}: expected {content_hash}, got {actual}"}
+        return {"category": "verified_match", "scope": scope,
+                "detail": f"hash matches for lines {lines}{env_note}"}
+    return {"category": "content_drift", "scope": scope,
+            "detail": f"hash mismatch for lines {lines}: expected {content_hash}, got {actual}{env_note}"}
 
 
 # --------------------------------------------------------------------------- #
@@ -346,32 +430,63 @@ def source_registry(doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return registry
 
 
-def collect_results(root: Path, client_id: Optional[str] = None) -> list[dict[str, Any]]:
-    """Classify every citation under ``root`` (optionally one client), sorted.
+def collect_results(root: Path, client_id: Optional[str] = None) -> dict[str, list[dict[str, Any]]]:
+    """Classify sources and citations under ``root`` (optionally one client).
 
-    ``root`` is both the file-enumeration root and the repo root used to resolve
-    repo-relative source paths, so the check is portable across checkouts.
+    Returns ``{"sources": [...], "citations": [...]}`` — two independent,
+    separately-sorted streams so source-existence health and citation-anchor
+    health are never conflated or double-counted. ``root`` is both the
+    file-enumeration root and the repo root used to resolve repo-relative source
+    paths, so the check is portable across checkouts.
+
+    Raises ``CheckError`` when ``client_id`` is given but no ontology file declares
+    it (the documented exit-2 usage error).
     """
     root = root.resolve()
-    results: list[dict[str, Any]] = []
+    citations: list[dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
+    known_clients: set[str] = set()
     for path in iter_yaml(root):
         try:
             doc = parse_yaml(path)
         except Exception as exc:  # noqa: BLE001 - surface a parse error as a result row
-            results.append({
-                "file": _rel(path, root), "object_id": None, "source_id": None,
-                "lines": None, "category": "source_missing",
-                "detail": f"YAML parse failed: {exc}",
+            citations.append({
+                "level": "citation", "file": _rel(path, root), "object_id": None,
+                "source_id": None, "lines": None, "category": "source_missing",
+                "scope": None, "detail": f"YAML parse failed: {exc}",
             })
             continue
-        if client_id is not None and doc.get("client_id", doc.get("id")) != client_id:
+        client_of_doc = doc.get("client_id", doc.get("id"))
+        if isinstance(client_of_doc, str):
+            known_clients.add(client_of_doc)
+        if client_id is not None and client_of_doc != client_id:
             continue
         registry = source_registry(doc)
+
+        # Source-level rows: every registry source that declares a `path`, whether
+        # or not any citation references it (uncited sources stay visible).
+        for source_id, source in sorted(registry.items()):
+            if not source.get("path"):
+                continue
+            outcome = classify_source(source, root)
+            sources.append({
+                "level": "source",
+                "file": _rel(path, root),
+                "source_id": source_id,
+                "source_type": source.get("type"),
+                "source_path": source.get("path"),
+                "category": outcome["category"],
+                "scope": outcome.get("scope"),
+                "detail": outcome["detail"],
+            })
+
+        # Citation-level rows: one per evidence ref, anchor health only.
         for object_id, ref in iter_citations(doc):
             source_id = ref.get("source_id")
             source = registry.get(source_id)
             outcome = check_citation(ref, source, root)
-            results.append({
+            citations.append({
+                "level": "citation",
                 "file": _rel(path, root),
                 "object_id": object_id,
                 "source_id": source_id,
@@ -381,12 +496,20 @@ def collect_results(root: Path, client_id: Optional[str] = None) -> list[dict[st
                 "content_hash": ref.get("content_hash"),
                 "snapshot_date": ref.get("snapshot_date"),
                 "category": outcome["category"],
+                "scope": outcome.get("scope"),
                 "detail": outcome["detail"],
             })
-    results.sort(key=lambda r: (
+
+    if client_id is not None and client_id not in known_clients:
+        raise CheckError(
+            f"unknown client {client_id!r}: no ontology file under {root} declares it"
+        )
+
+    citations.sort(key=lambda r: (
         r["file"] or "", r["object_id"] or "", r["source_id"] or "", str(r["lines"] or "")
     ))
-    return results
+    sources.sort(key=lambda r: (r["file"] or "", r["source_id"] or ""))
+    return {"sources": sources, "citations": citations}
 
 
 def _rel(path: Path, root: Path) -> str:
@@ -396,21 +519,24 @@ def _rel(path: Path, root: Path) -> str:
         return str(path)
 
 
-def summarize(results: list[dict[str, Any]]) -> dict[str, int]:
+def summarize(rows: list[dict[str, Any]], categories: list[str]) -> dict[str, int]:
     """Deterministic per-category counts covering every category (zeros included)."""
-    counts = {category: 0 for category in ALL_CATEGORIES}
-    for result in results:
-        counts[result["category"]] = counts.get(result["category"], 0) + 1
+    counts = {category: 0 for category in categories}
+    for row in rows:
+        counts[row["category"]] = counts.get(row["category"], 0) + 1
     return counts
 
 
-def strict_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [r for r in results if r["category"] in STRICT_FAILURE_CATEGORIES]
+def strict_failures(report: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Genuine-failure rows across both levels (advisory categories excluded)."""
+    citation_fails = [r for r in report["citations"] if r["category"] in CITATION_STRICT_FAILURES]
+    source_fails = [r for r in report["sources"] if r["category"] in SOURCE_STRICT_FAILURES]
+    return source_fails + citation_fails
 
 
-def compute_exit(results: list[dict[str, Any]], strict: bool) -> int:
+def compute_exit(report: dict[str, list[dict[str, Any]]], strict: bool) -> int:
     """Exit 1 only under ``--strict`` with a genuine-failure category present."""
-    if strict and strict_failures(results):
+    if strict and strict_failures(report):
         return 1
     return 0
 
@@ -418,36 +544,59 @@ def compute_exit(results: list[dict[str, Any]], strict: bool) -> int:
 # --------------------------------------------------------------------------- #
 # Output rendering.
 # --------------------------------------------------------------------------- #
-def render_json(results: list[dict[str, Any]], strict: bool) -> str:
+def render_json(report: dict[str, list[dict[str, Any]]], strict: bool) -> str:
     payload = {
         "strict": strict,
-        "summary": summarize(results),
-        "exit_code": compute_exit(results, strict),
-        "results": results,
+        "exit_code": compute_exit(report, strict),
+        "source_summary": summarize(report["sources"], ALL_SOURCE_CATEGORIES),
+        "citation_summary": summarize(report["citations"], ALL_CITATION_CATEGORIES),
+        "sources": report["sources"],
+        "citations": report["citations"],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def render_human(results: list[dict[str, Any]], strict: bool) -> str:
-    counts = summarize(results)
-    lines: list[str] = ["evidence health report"]
-    lines.append("  summary:")
-    for category in ALL_CATEGORIES:
-        marker = "  (strict-fail)" if category in STRICT_FAILURE_CATEGORIES else ""
-        lines.append(f"    {category:<28} {counts[category]}{marker}")
-    lines.append(f"  citations checked: {len(results)}")
+def _scope_tag(row: dict[str, Any]) -> str:
+    return f" [{row['scope']}]" if row.get("scope") else ""
+
+
+def render_human(report: dict[str, list[dict[str, Any]]], strict: bool) -> str:
+    sources = report["sources"]
+    citations = report["citations"]
+    source_counts = summarize(sources, ALL_SOURCE_CATEGORIES)
+    citation_counts = summarize(citations, ALL_CITATION_CATEGORIES)
+    lines: list[str] = ["evidence health report", ""]
+
+    # Source-level section (existence of each path-bearing registry source).
+    lines.append("  SOURCES (existence of each path-bearing registry source):")
+    for category in ALL_SOURCE_CATEGORIES:
+        marker = "  (strict-fail)" if category in SOURCE_STRICT_FAILURES else ""
+        lines.append(f"    {category:<28} {source_counts[category]}{marker}")
+    lines.append(f"  sources checked: {len(sources)}")
+    if not sources:
+        lines.append("  (no path-bearing sources found)")
+    for row in sources:
+        tag = "FAIL" if (strict and row["category"] in SOURCE_STRICT_FAILURES) else "----"
+        lines.append(f"  [{tag}] source/{row['category']}{_scope_tag(row)}: {row['file']} <- {row['source_id']}")
+        lines.append(f"         {row['detail']}")
     lines.append("")
-    if not results:
-        lines.append("  no citations found")
-    for result in results:
-        tag = "FAIL" if (strict and result["category"] in STRICT_FAILURE_CATEGORIES) else "----"
-        location = f"{result['file']} :: {result['object_id']}"
-        anchor = ""
-        if result.get("lines"):
-            anchor = f" lines {result['lines']}"
-        lines.append(f"  [{tag}] {result['category']}: {location} <- {result['source_id']}{anchor}")
-        lines.append(f"         {result['detail']}")
-    exit_code = compute_exit(results, strict)
+
+    # Citation-level section (anchor health of each evidence ref).
+    lines.append("  CITATIONS (anchor health of each evidence ref):")
+    for category in ALL_CITATION_CATEGORIES:
+        marker = "  (strict-fail)" if category in CITATION_STRICT_FAILURES else ""
+        lines.append(f"    {category:<28} {citation_counts[category]}{marker}")
+    lines.append(f"  citations checked: {len(citations)}")
+    if not citations:
+        lines.append("  (no citations found)")
+    for row in citations:
+        tag = "FAIL" if (strict and row["category"] in CITATION_STRICT_FAILURES) else "----"
+        location = f"{row['file']} :: {row['object_id']}"
+        anchor = f" lines {row['lines']}" if row.get("lines") else ""
+        lines.append(f"  [{tag}] citation/{row['category']}{_scope_tag(row)}: {location} <- {row['source_id']}{anchor}")
+        lines.append(f"         {row['detail']}")
+
+    exit_code = compute_exit(report, strict)
     verdict = "advisory (no --strict)" if not strict else ("PASS" if exit_code == 0 else "FAIL")
     lines.append("")
     lines.append(f"  verdict: {verdict} (exit {exit_code})")
@@ -460,14 +609,18 @@ def render_human(results: list[dict[str, Any]], strict: bool) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Re-hash cited evidence spans and report per-citation health. Repo-relative "
-            "sources are truly verified; external absolute paths unavailable here are "
-            "advisory (unresolvable_in_environment). --strict exits non-zero only on "
-            "genuine drift/missing/invalid/unsupported anchors, never on advisory rows."
+            "Report evidence health at two levels: SOURCES (existence of each "
+            "path-bearing registry source) and CITATIONS (re-hashed anchor health of "
+            "each evidence ref). Repo-relative sources are verified portably; an "
+            "available external absolute path is verified environment-locally only "
+            "(scope=environment_local) and one that is unavailable here is advisory "
+            "(unresolvable_in_environment / source unavailable_in_environment). "
+            "--strict exits non-zero only on genuine drift/missing/invalid/unsupported "
+            "anchors or a missing repo-relative source, never on advisory rows."
         )
     )
     parser.add_argument("--root", default=".", help="Repo root: file enumeration + repo-relative path resolution (default: cwd)")
-    parser.add_argument("--client", help="Limit to a single client slug (e.g. femme-events)")
+    parser.add_argument("--client", help="Limit to a single client slug (e.g. femme-events); unknown slug is a usage error (exit 2)")
     parser.add_argument("--json", action="store_true", help="Emit deterministic JSON instead of the human report")
     parser.add_argument("--strict", action="store_true", help="Exit 1 on any genuine-failure category (drift/missing/invalid/unsupported)")
     return parser
@@ -480,15 +633,15 @@ def run(argv: Optional[list] = None) -> int:
         print(json.dumps({"error": f"root does not exist: {args.root}"}), file=sys.stderr)
         return 2
     try:
-        results = collect_results(root, client_id=args.client)
+        report = collect_results(root, client_id=args.client)
     except CheckError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
     if args.json:
-        print(render_json(results, args.strict))
+        print(render_json(report, args.strict))
     else:
-        print(render_human(results, args.strict))
-    return compute_exit(results, args.strict)
+        print(render_human(report, args.strict))
+    return compute_exit(report, args.strict)
 
 
 if __name__ == "__main__":

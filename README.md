@@ -12,7 +12,7 @@ Implemented v0.1 foundation:
 - `scripts/ontology_loader.py` — the single canonical YAML-reading entry point: `parse_yaml(path)`, manifest-first `iter_yaml(root)`, and `load_documents(root)`. Both the validator and exporter import it, so they parse files the same way and enumerate the same file set. Dependency-free (Ruby stdlib YAML).
 - `scripts/validate_ontology.py` — deterministic validator: enforces the per-kind JSON Schema first, then canonical cross-file reference and evidence rules.
 - `scripts/check_rules.py` — deterministic guardrail engine (stdlib-only, importable + CLI): runs a client's `machine_check` rules against draft copy and reports violations as JSON, with enforceable-severity exit codes.
-- `scripts/check_evidence.py` — deterministic evidence-health check (stdlib-only, importable + CLI): re-hashes cited spans against their `content_hash` anchors and reports per-citation status (human or JSON). `--strict` fails on genuine drift/missing/invalid/unsupported anchors; external absolute paths unavailable in the environment stay advisory (`unresolvable_in_environment`).
+- `scripts/check_evidence.py` — deterministic evidence-health check (stdlib-only, importable + CLI): reports two separate levels — **sources** (existence of every path-bearing registry source, even uncited: `present` / `missing` / `unavailable_in_environment`) and **citations** (re-hashing `content_hash` anchors, human or JSON). Verification is portable vs environment-local (`scope: portable` for repo-relative sources, `scope: environment_local` for an available external absolute path). `--strict` fails on genuine drift/missing/invalid/unsupported anchors or a missing repo-relative source; external absolute paths unavailable in the environment stay advisory (`unresolvable_in_environment` / source `unavailable_in_environment`), and an unknown `--client` is a usage error (exit 2).
 - `tests/run_fixtures.py` — proves invalid fixtures (`tests/fixtures/`) are rejected for the expected reason.
 - `tests/run_checks.py` — proves the guardrail engine's matching, advisory labeling, and exit-code semantics.
 - `tests/run_evidence.py` — proves the evidence-health checker's utf8-lf-v1 hashing, drift/CRLF/invalid-range/unavailable-path categories, and strict exit semantics.
@@ -146,13 +146,13 @@ python3 tests/run_evidence.py   # the evidence-health checker hashes + exits cor
 - `run_fixtures.py` drives `tests/fixtures/<case>/` through the validator. Each case is a minimal repo root that must fail for one specific reason — covering schema-shape rejections (missing required fields, malformed IDs, bad enums, unknown kinds, unknown fields, malformed manifests/projections, and a malformed `machine_check` payload) and cross-reference/evidence/secret rejections (missing evidence on an active object, a dangling relationship endpoint, a projection referencing an unknown module, a duplicate ID, an uncompilable `regex_policy` pattern, and a committed secret pattern). It fails if any fixture unexpectedly passes or fails with the wrong message.
 - `run_export.py` validates `tests/fixtures/valid/` (a complete, passing client), then runs `export_sqlite.py` into a temporary database and asserts the expected tables and row counts. The repo's own `build/` directory is never touched.
 - `run_checks.py` exercises `scripts/check_rules.py` — the real-client acceptance cases (a blocking violation exits non-zero, a warning is reported but exits 0 until `--fail-on warning`) plus unit coverage of term/regex matching and the advisory (`draft`/`proposed` never gate) exit matrix.
-- `run_evidence.py` exercises `scripts/check_evidence.py` — the pure utf8-lf-v1 helpers plus per-citation classification against real temp files (verified match, drift from an in-span edit and from a line inserted before the range, CRLF/LF equivalence, invalid range, missing repo source, unavailable external path, unsupported hash version, and missing anchor) and an end-to-end `--strict` pass proving drift fails while an unavailable external path stays advisory.
+- `run_evidence.py` exercises `scripts/check_evidence.py` — the pure utf8-lf-v1 helpers; per-citation classification against real temp files (verified match, drift from an in-span edit and from a line inserted before the range, CRLF/LF equivalence, invalid range, missing repo source, unavailable external path, unsupported hash version, and missing anchor); source-level existence coverage proving an *uncited* path-bearing source is still reported (present / missing repo-relative / unavailable external, with missing gating and external advisory); the portable-vs-environment-local scope distinction and the unknown-`--client` exit-2 usage error; and an end-to-end `--strict` pass proving drift fails while an unavailable external path stays advisory.
 
 These fixtures live under `tests/` and use a synthetic `demo` client, so they are not picked up by a repo-root `validate_ontology.py` run.
 
 ## Continuous integration
 
-`.github/workflows/validate.yml` runs on every push and pull request. It installs Python 3 and Ruby (the validator and exporter shell out to `ruby -e` for YAML parsing), then runs, in order: ontology validation, the SQLite export, `tests/run_fixtures.py`, `tests/run_export.py`, `tests/run_checks.py`, and `tests/run_evidence.py`. Any validation, export, or check failure fails the build, so malformed data cannot merge. A final advisory `check_evidence.py --strict` step re-hashes cited spans: repo-relative drift blocks, but external absolute paths unavailable on the runner report `unresolvable_in_environment` and never fail the build.
+`.github/workflows/validate.yml` runs on every push and pull request. It installs Python 3 and Ruby (the validator and exporter shell out to `ruby -e` for YAML parsing), then runs, in order: ontology validation, the SQLite export, `tests/run_fixtures.py`, `tests/run_export.py`, `tests/run_checks.py`, and `tests/run_evidence.py`. Any validation, export, or check failure fails the build, so malformed data cannot merge. A final advisory `check_evidence.py --strict` step re-hashes cited spans and checks source existence: a repo-relative drift or a missing repo-relative source blocks, but external absolute paths unavailable on the runner report `unresolvable_in_environment` / source `unavailable_in_environment` and never fail the build.
 
 ## Export SQLite runtime projection
 
@@ -214,14 +214,19 @@ python3 scripts/check_evidence.py --client femme-events            # human repor
 python3 scripts/check_evidence.py --json --strict                  # deterministic JSON, gating
 ```
 
-Categories: `verified_match`, `content_drift`, `source_missing`, `anchor_missing`,
-`invalid_range`, `unsupported_hash_version`, `unresolvable_in_environment`. Without
-`--strict` it is a pure report (exit 0). With `--strict` it exits 1 only on a
-genuine failure (drift/missing/invalid/unsupported); external absolute paths that
-are unavailable in the current environment stay advisory
-(`unresolvable_in_environment`) and never gate — so the same command is safe to run
-in CI. See `docs/conventions.md` for the anchor-vs-vendor policy and the
-re-confirmation workflow.
+The report has two levels. **Sources** (one row per path-bearing registry source,
+even if uncited): `present`, `missing`, `unavailable_in_environment`. **Citations**
+(one row per evidence ref): `verified_match`, `content_drift`, `source_missing`,
+`anchor_missing`, `invalid_range`, `unsupported_hash_version`,
+`unresolvable_in_environment`. Verification scope is explicit — repo-relative
+sources verify `portable`; an available external absolute path verifies
+`environment_local` only (a real check here, never a portable/CI guarantee). Without
+`--strict` it is a pure report (exit 0). With `--strict` it exits 1 only on a genuine
+failure (citation drift/source_missing/invalid/unsupported or source `missing`);
+external absolute paths that are unavailable in the current environment stay advisory
+and never gate — so the same command is safe to run in CI. An unknown `--client` is a
+usage error (exit 2). See `docs/conventions.md` for the anchor-vs-vendor policy and
+the re-confirmation workflow.
 
 ## How agents should consume projections
 
