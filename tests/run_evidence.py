@@ -371,7 +371,8 @@ def scope_and_client_cases() -> list[str]:
 
 
 def root_validation_cases() -> list[str]:
-    """--root must be an existing directory; a file or missing path is exit 2."""
+    """--root must be an existing, enumerable directory; a file, missing path, or
+    unreadable (mode 000) directory is a usage error => exit 2."""
     failures: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -390,6 +391,32 @@ def root_validation_cases() -> list[str]:
         if ce.run(["--root", str(missing), "--strict"]) != 2:
             failures.append("missing --root: expected exit 2")
 
+        # An existing but unreadable/unenumerable directory (mode 000) must NOT be a
+        # silent empty PASS: iter_yaml() yields nothing, so without a guard --strict
+        # would exit 0. It is an invalid CLI root => usage error, exit 2.
+        unreadable = root / "unreadable-dir"
+        unreadable.mkdir()
+        unreadable.chmod(0o000)
+        try:
+            # Skip only if this process can still enumerate it (e.g. running as
+            # root, where mode bits do not restrict access) — the guard is about a
+            # genuinely unenumerable root, which we must first be able to create.
+            probe_blocked = False
+            try:
+                for _ in unreadable.iterdir():
+                    break
+            except OSError:
+                probe_blocked = True
+            if probe_blocked:
+                for extra in (["--strict"], ["--strict", "--json"], []):
+                    rc = ce.run(["--root", str(unreadable), *extra])
+                    if rc != 2:
+                        failures.append(
+                            f"unreadable --root {extra}: expected exit 2, got {rc}"
+                        )
+        finally:
+            unreadable.chmod(0o755)
+
         # A real directory root is accepted (does not hit the usage-error guard).
         demo = root / "clients" / "demo"
         demo.mkdir(parents=True, exist_ok=True)
@@ -398,7 +425,7 @@ def root_validation_cases() -> list[str]:
             failures.append("directory --root: expected exit 0 for a valid empty-ish repo")
 
     if not failures:
-        print("ok: root validation cases (file/missing --root => exit 2; directory ok)")
+        print("ok: root validation cases (file/missing/unreadable --root => exit 2; directory ok)")
     return failures
 
 

@@ -651,6 +651,15 @@ def run(argv: Optional[list] = None) -> int:
     if not root.is_dir():
         print(json.dumps({"error": f"root is not a directory: {args.root}"}), file=sys.stderr)
         return 2
+    # An existing directory that cannot be enumerated (e.g. mode 000) would make
+    # iter_yaml() silently yield nothing and produce a false empty PASS. Reject an
+    # unreadable/unenumerable root as a usage error before collecting results.
+    try:
+        for _ in root.iterdir():
+            break
+    except OSError as exc:
+        print(json.dumps({"error": f"root is not readable: {args.root} ({exc})"}), file=sys.stderr)
+        return 2
     try:
         report = collect_results(root, client_id=args.client)
     except CheckError as exc:
