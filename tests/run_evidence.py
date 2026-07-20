@@ -318,6 +318,38 @@ def scope_and_client_cases() -> list[str]:
     return failures
 
 
+def root_validation_cases() -> list[str]:
+    """--root must be an existing directory; a file or missing path is exit 2."""
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+
+        # A regular file passes exists() but yields no documents: must NOT be a
+        # silent clean exit 0. It is an invalid CLI root => usage error, exit 2.
+        a_file = root / "README.md"
+        a_file.write_text("# not a repo root\n", encoding="utf-8")
+        for extra in (["--strict"], ["--strict", "--json"], []):
+            rc = ce.run(["--root", str(a_file), *extra])
+            if rc != 2:
+                failures.append(f"file --root {extra}: expected exit 2, got {rc}")
+
+        # A nonexistent root is still exit 2 (regression guard on prior behavior).
+        missing = root / "does-not-exist-dir"
+        if ce.run(["--root", str(missing), "--strict"]) != 2:
+            failures.append("missing --root: expected exit 2")
+
+        # A real directory root is accepted (does not hit the usage-error guard).
+        demo = root / "clients" / "demo"
+        demo.mkdir(parents=True, exist_ok=True)
+        _write_client_scaffold(demo)
+        if ce.run(["--root", str(root), "--json"]) != 0:
+            failures.append("directory --root: expected exit 0 for a valid empty-ish repo")
+
+    if not failures:
+        print("ok: root validation cases (file/missing --root => exit 2; directory ok)")
+    return failures
+
+
 def integration_cases() -> list[str]:
     """collect_results + --strict exit behavior over a tiny temp repo tree."""
     failures: list[str] = []
@@ -398,6 +430,7 @@ def main() -> int:
         + citation_cases()
         + source_cases()
         + scope_and_client_cases()
+        + root_validation_cases()
         + integration_cases()
     )
     if failures:

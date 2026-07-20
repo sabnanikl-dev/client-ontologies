@@ -632,6 +632,9 @@ def run(argv: Optional[list] = None) -> int:
     if not root.exists():
         print(json.dumps({"error": f"root does not exist: {args.root}"}), file=sys.stderr)
         return 2
+    if not root.is_dir():
+        print(json.dumps({"error": f"root is not a directory: {args.root}"}), file=sys.stderr)
+        return 2
     try:
         report = collect_results(root, client_id=args.client)
     except CheckError as exc:
