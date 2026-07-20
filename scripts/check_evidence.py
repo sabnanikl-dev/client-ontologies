@@ -38,7 +38,9 @@ Design goals (issue #23):
 For ``utf8-lf-v1`` the cited bytes are computed by:
 
   1. decode the source as UTF-8;
-  2. normalize CRLF and CR line endings to LF;
+  2. normalize CRLF and CR line endings to LF, then split into logical lines,
+     treating a single trailing LF as a terminator (it does not add an empty
+     one-past-end line) while preserving real empty lines;
   3. interpret ``lines`` as 1-based inclusive range(s) over logical lines
      (the repo's existing ``"a-b,c-d,e"`` grammar — union in written order);
   4. join the selected logical lines with ``\n``;
@@ -199,9 +201,23 @@ def parse_line_spec(spec: str) -> list[int]:
 
 
 def to_logical_lines(raw: str) -> list[str]:
-    """Normalize CRLF/CR to LF and split into logical lines (utf8-lf-v1 step 1-2)."""
+    """Normalize CRLF/CR to LF and split into logical lines (utf8-lf-v1 step 1-2).
+
+    A single trailing LF is a line *terminator*, not a separator that introduces
+    a new empty line, so the synthetic empty element ``str.split("\\n")`` appends
+    for any text ending in ``\\n`` is dropped. Real (interior or genuinely
+    trailing) empty lines are preserved: ``"a\\n\\nb\\n"`` -> ``["a", "", "b"]``
+    and ``"a\\nb\\n\\n"`` -> ``["a", "b", ""]``. This keeps a one-past-end
+    citation on a newline-terminated source an ``invalid_range`` rather than a
+    spurious ``verified_match`` (e.g. two-line ``"one\\ntwo\\n"`` has no line 3).
+    Line-ending style is irrelevant: CRLF/CR normalize to LF first, so the
+    terminator drop is identical across ``\\n``, ``\\r\\n`` and ``\\r``.
+    """
     normalized = raw.replace("\r\n", "\n").replace("\r", "\n")
-    return normalized.split("\n")
+    lines = normalized.split("\n")
+    if normalized.endswith("\n"):
+        lines.pop()  # drop only the synthetic terminal element the trailing LF adds
+    return lines
 
 
 def select_span(logical_lines: list[str], line_numbers: list[int]) -> str:

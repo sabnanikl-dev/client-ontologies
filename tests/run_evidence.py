@@ -66,9 +66,28 @@ def unit_cases() -> list[str]:
         else:
             failures.append(f"parse_line_spec({bad!r}) should have raised ValueError")
 
-    # to_logical_lines: CRLF and CR normalize to LF.
-    if ce.to_logical_lines("a\r\nb\rc\n") != ["a", "b", "c", ""]:
+    # to_logical_lines: CRLF and CR normalize to LF; a single trailing LF is a
+    # terminator (no synthetic one-past-end empty line), not a separator.
+    if ce.to_logical_lines("a\r\nb\rc\n") != ["a", "b", "c"]:
         failures.append("to_logical_lines newline normalization failed")
+    # Trailing-LF terminator: two-/one-line sources have exactly 2 / 1 lines, and
+    # the count is identical across LF, CRLF and CR (line-ending equivalence).
+    if ce.to_logical_lines("one\ntwo\n") != ["one", "two"]:
+        failures.append("to_logical_lines trailing-LF two-line (LF) failed")
+    if ce.to_logical_lines("one\r\ntwo\r\n") != ["one", "two"]:
+        failures.append("to_logical_lines trailing-LF two-line (CRLF) failed")
+    if ce.to_logical_lines("one\rtwo\r") != ["one", "two"]:
+        failures.append("to_logical_lines trailing-LF two-line (CR) failed")
+    if ce.to_logical_lines("only\n") != ["only"]:
+        failures.append("to_logical_lines trailing-LF one-line failed")
+    # Real empty lines are preserved — interior and genuinely trailing.
+    if ce.to_logical_lines("one\n\ntwo\n") != ["one", "", "two"]:
+        failures.append("to_logical_lines interior empty line not preserved")
+    if ce.to_logical_lines("one\ntwo\n\n") != ["one", "two", ""]:
+        failures.append("to_logical_lines trailing empty line not preserved")
+    # A source with no trailing newline is unchanged.
+    if ce.to_logical_lines("one\ntwo") != ["one", "two"]:
+        failures.append("to_logical_lines no-trailing-newline failed")
 
     # select_span: joins with \n, no trailing newline; out-of-range raises.
     if ce.select_span(["a", "b", "c"], [1, 3]) != "a\nc":
@@ -151,6 +170,39 @@ def citation_cases() -> list[str]:
         cat = check({"source_id": "s", "content_hash": good_hash})
         if cat != "invalid_range":
             failures.append(f"invalid_range (missing lines): got {cat}")
+
+        # invalid_range: a trailing LF must NOT create a synthetic one-past-end
+        # line. A two-line source "one\ntwo\n" has no line 3; an anchor computed
+        # for that nonexistent span is invalid_range, never verified_match.
+        two_line = "one\ntwo\n"
+        src.write_text(two_line, encoding="utf-8")
+        past_end = _hash("one\ntwo", "1-2")  # any anchor; line 3 must not resolve
+        cat = check({"source_id": "s", "lines": "3", "content_hash": past_end})
+        if cat != "invalid_range":
+            failures.append(f"invalid_range (trailing-LF one-past-end): got {cat}")
+        # Same source with CRLF terminators: still exactly two lines => still invalid.
+        src.write_bytes("one\r\ntwo\r\n".encode("utf-8"))
+        cat = check({"source_id": "s", "lines": "3", "content_hash": past_end})
+        if cat != "invalid_range":
+            failures.append(f"invalid_range (trailing-CRLF one-past-end): got {cat}")
+        # A real line 2 in that two-line source still verifies (line-ending eq).
+        src.write_text(two_line, encoding="utf-8")
+        cat = check({"source_id": "s", "lines": "2", "content_hash": _hash(two_line, "2")})
+        if cat != "verified_match":
+            failures.append(f"verified_match (trailing-LF real last line): got {cat}")
+        # A GENUINELY trailing empty line stays citable: "one\ntwo\n\n" has 3
+        # logical lines and line 3 (the empty one) verifies — valid-empty-line
+        # semantics are preserved; only the synthetic terminator is dropped.
+        three_line = "one\ntwo\n\n"
+        src.write_text(three_line, encoding="utf-8")
+        cat = check({"source_id": "s", "lines": "3", "content_hash": _hash(three_line, "3")})
+        if cat != "verified_match":
+            failures.append(f"verified_match (real trailing empty line): got {cat}")
+        # ...but line 4 (past the real empty line) is still out of range.
+        cat = check({"source_id": "s", "lines": "4", "content_hash": past_end})
+        if cat != "invalid_range":
+            failures.append(f"invalid_range (past real trailing empty line): got {cat}")
+        src.write_text(text, encoding="utf-8")  # restore the shared fixture
 
         # unsupported_hash_version: wrong version tag is a static defect.
         cat = check({"source_id": "s", "lines": "2-3",
