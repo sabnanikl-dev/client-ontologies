@@ -24,9 +24,20 @@ python3 scripts/validate_ontology.py                                  # canonica
 python3 scripts/export_sqlite.py --output build/client-ontologies.sqlite   # runtime projection
 python3 tests/run_fixtures.py    # every invalid fixture must FAIL for its reason
 python3 tests/run_export.py      # the valid fixture must validate + export cleanly
+python3 tests/run_competency.py  # each client still answers its competency questions (outcome regression)
 python3 tests/run_checks.py      # the machine_check guardrail engine matches + exits correctly
 python3 tests/run_evidence.py    # the evidence-health checker hashes + exits correctly
 ```
+
+`tests/run_competency.py` is the outcome-oriented suite: it reads the test-owned
+registry `tests/competency/questions.yaml` (NOT a canonical `kind`; never loaded
+as client truth), builds a throwaway SQLite export through the shared
+loader/export path (never the repo's `build/`), and proves each client ontology
+still answers its business/governance competency questions — scoped strictly
+through the named projection, with a drift-isolation regression. Expected answers
+live only in the registry, so a consumer (issue #19) can reuse the corpus to
+prove YAML/SQLite parity without re-encoding them. It needs no model, network,
+API credential, or live client system.
 
 `scripts/check_rules.py` is the runtime guardrail engine (library + CLI, stdlib
 only): it runs a client's `machine_check` rules against copy
