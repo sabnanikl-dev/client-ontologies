@@ -1,0 +1,34 @@
+# Invalid fixture: `predicate` is valid, but `inverse` names a term outside the
+# controlled predicate vocabulary. `inverse` must resolve to a real vocabulary
+# predicate (schema enum), not an arbitrary string.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.brand.voice
+    label: "Voice"
+    entity_type: brand_object
+    description: "Brand voice."
+    source_confidence: draft
+  - id: demo.brand.palette
+    label: "Palette"
+    entity_type: brand_object
+    description: "Brand palette."
+    source_confidence: draft
+relationships:
+  - id: demo.brand.voice-uses-palette
+    subject: demo.brand.voice
+    predicate: uses
+    object: demo.brand.palette
+    inverse: not_a_real_predicate
+    source_confidence: draft
+rules: []

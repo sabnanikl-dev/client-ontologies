@@ -517,6 +517,12 @@ Relationships should be practical and implementation-useful.
 
 ### 7.1 Relationship object shape
 
+**Implemented.** `subject`, `predicate`, `object`, and `source_confidence` are
+required; `cardinality`, `inverse`, `description`, `workstreams`, and `evidence`
+are optional. `predicate` and `inverse` are drawn from the controlled vocabulary
+(§7.3); `cardinality` is one of `one_to_one`, `one_to_many`, `many_to_one`,
+`many_to_many`, `unknown`.
+
 ```yaml
 relationships:
   - id: jmd.image.creates_sanity_asset
@@ -526,17 +532,25 @@ relationships:
     workstreams:
       - inventory_images
     cardinality: many_to_one
+    inverse: sourced_from
     description: "An approved inventory image may create or update a Sanity asset for website delivery."
     evidence:
       - source_id: jmd-inventory-plan
         lines: "406-418"
 ```
 
-### 7.2 Compact triple form
+### 7.2 Compact triple form (illustrative only — not accepted by the v0.1 schema)
 
-For simple modules, triples are acceptable:
+> **Not implemented.** The compact `triples` form below is illustrative shorthand
+> for discussing relationships in prose. It is **not** a canonical module shape:
+> `schemas/module.schema.json` defines no top-level `triples` property and keeps
+> `additionalProperties: false`, so a module using this form is rejected by
+> `scripts/validate_ontology.py`. Author relationships with the implemented
+> `relationships` object (§7.1). Adopting a compact form would require a
+> deliberate schema PR and is out of scope for v0.1.
 
 ```yaml
+# Illustrative shorthand only — NOT a valid module. Use the §7.1 `relationships` object.
 triples:
   - [InventoryImage, creates_or_updates, SanityAsset]
   - [SanityAsset, renders_in, ShowroomCard]
@@ -545,28 +559,64 @@ triples:
 
 ### 7.3 Relationship predicates
 
-Recommended generic predicates:
+**Implemented as a controlled vocabulary.** `predicate` is a schema enum
+(`schemas/module.schema.json` `$defs.predicateName`), seeded from the generic set
+below plus every predicate live in `clients/*/modules`. An unknown predicate
+fails validation; adding one is a deliberate schema PR (see
+`docs/conventions.md` for the full predicate table with meanings, inverses, and
+domain/range).
 
 ```yaml
 predicates:
+  - appears_on
+  - archived_by
   - contains
-  - uses
   - creates
   - creates_or_updates
-  - overrides
-  - merges_with
-  - renders_in
-  - appears_on
-  - requires_approval_from
   - governed_by
+  - governs
+  - measures
+  - merges_with
+  - must_match
+  - overrides
+  - renders_in
+  - requires_approval_from
   - sourced_from
   - stored_in
-  - synchronized_by
-  - archived_by
   - supports
+  - synchronized_by
   - targets
-  - must_match
+  - uses
 ```
+
+**Experimental escape:** a predicate matching the bounded token pattern
+`^x_[a-z][a-z0-9_]*(?![\s\S])` (e.g. `x_amplifies`) bypasses the enum for trialling,
+mirroring the `x_` field-extension escape. The trailing `(?![\s\S])` is an
+absolute-end negative lookahead — ECMAScript-portable syntax that pins the token to
+the true end of string and behaves identically under the repo's Python evaluator and
+any Draft 2020-12 (ECMAScript-regex) engine, without a Python-only anchor such as
+`\Z`. The token must be complete and non-empty — a bare `x_`, embedded whitespace, or
+a trailing newline is rejected, so the escape cannot reintroduce free-string drift.
+An `x_` predicate carries no
+domain/range constraints and is not a valid `inverse` value; promote it to a real
+enum member once it stabilises.
+
+**Bounded domain/range (semantic validation).** Beyond the enum, a small,
+high-confidence subset in `scripts/validate_ontology.py` `PREDICATE_CONSTRAINTS`
+pins the allowed subject/object `entity_type`. The cross-reference pass resolves
+each endpoint and rejects a mismatch. Current constraints — each reflecting
+semantics already true of every live relationship, deliberately *not* an
+OWL-style class hierarchy or disjointness layer:
+
+| Predicate | Constraint |
+| --- | --- |
+| `measures` | subject `entity_type` must be `metric` |
+| `governed_by` | object `entity_type` must be `governance_object` |
+| `contains` | subject `entity_type` must be `system_resource` |
+
+Predicates outside this subset stay vocabulary-checked only. A deterministic
+sync guard (`tests/run_predicates.py` plus a validator self-check) fails if any
+constraint key or live `inverse` name leaves the schema enum.
 
 ---
 

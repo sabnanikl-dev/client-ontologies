@@ -4,6 +4,30 @@
   "title": "Ontology module (kind: ontology_module)",
   "description": "The substance of an ontology: entities, relationships, rules, and optional state machines for one workstream. Cross-reference checks (relationship endpoints, conditional evidence) live in scripts/validate_ontology.py.",
   "$defs": {
+    "predicateName": {
+      "description": "Controlled relationship predicate vocabulary. Seeded from docs/spec.md §7.3 plus every predicate live in clients/*/modules. Adding a predicate is a deliberate schema PR (see docs/conventions.md). scripts/validate_ontology.py PREDICATE_CONSTRAINTS keys and any relationship `inverse` must be members of this enum; tests/run_predicates.py enforces that sync.",
+      "enum": [
+        "appears_on",
+        "archived_by",
+        "contains",
+        "creates",
+        "creates_or_updates",
+        "governed_by",
+        "governs",
+        "measures",
+        "merges_with",
+        "must_match",
+        "overrides",
+        "renders_in",
+        "requires_approval_from",
+        "sourced_from",
+        "stored_in",
+        "supports",
+        "synchronized_by",
+        "targets",
+        "uses"
+      ]
+    },
     "entity": {
       "type": "object",
       "required": ["id", "label", "entity_type", "description", "source_confidence"],
@@ -28,8 +52,12 @@
       "properties": {
         "id": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
         "subject": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
-        "predicate": {"type": "string"},
+        "predicate": {"anyOf": [{"$ref": "#/$defs/predicateName"}, {"type": "string", "pattern": "^x_[a-z][a-z0-9_]*(?![\\s\\S])"}]},
         "object": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
+        "cardinality": {"enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many", "unknown"]},
+        "inverse": {"$ref": "#/$defs/predicateName"},
+        "description": {"type": "string"},
+        "workstreams": {"type": "array", "items": {"type": "string"}},
         "source_confidence": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/confidence"},
         "evidence": {"$ref": "https://client-ontologies.local/schemas/evidence.schema.json#/$defs/evidenceList"}
       },

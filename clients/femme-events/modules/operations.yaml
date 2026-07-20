@@ -51,6 +51,8 @@ relationships:
     subject: femme-events.operations.photo-proof-inventory
     predicate: governed_by
     object: femme-events.operations.approval-boundary
+    cardinality: many_to_one
+    inverse: governs
     source_confidence: owner_reviewed
     evidence:
       - source_id: femme-local-seo-sot

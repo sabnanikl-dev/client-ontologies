@@ -55,6 +55,8 @@ relationships:
     subject: jmd-menswear.operations.approval-boundary
     predicate: governs
     object: jmd-menswear.website.site
+    cardinality: one_to_many
+    inverse: governed_by
     source_confidence: verified
     evidence:
       - source_id: jmd-harness-agents

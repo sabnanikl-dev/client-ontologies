@@ -31,6 +31,13 @@ CASES = [
     ("malformed-manifest-path", "expected type string"),
     ("machine-check-bad-payload", "machine_check: matched 0 oneOf branches"),
     ("bad-content-hash", "does not match pattern"),
+    # Predicate vocabulary (schema enum) rejections.
+    ("bad-predicate", "predicate: did not satisfy any of anyOf"),
+    ("invalid-experimental-predicate", "predicate: did not satisfy any of anyOf"),
+    ("invalid-inverse", "inverse: 'not_a_real_predicate' not one of"),
+    # Bounded predicate domain/range (semantic pass) rejections.
+    ("invalid-constrained-subject", "predicate 'measures' subject entity_type 'brand_object' not allowed"),
+    ("invalid-constrained-object", "predicate 'governed_by' object entity_type 'work_product' not allowed"),
     # Cross-reference, evidence, and secret-scan rejections.
     ("invalid-regex-policy", "invalid regex_policy pattern"),
     ("missing-evidence", "active/approved entity lacks evidence"),

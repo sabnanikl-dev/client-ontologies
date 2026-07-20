@@ -1,0 +1,33 @@
+# Invalid fixture: the `governed_by` predicate constrains its object to
+# entity_type `governance_object` (PREDICATE_CONSTRAINTS). Here the object
+# resolves to a work_product, so the bounded domain/range check must reject it.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.operations
+title: "Demo operations"
+client_id: demo
+status: active
+workstreams: [operations]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.operations.proof
+    label: "Proof run"
+    entity_type: workflow_artifact
+    description: "A governed workflow artifact."
+    source_confidence: draft
+  - id: demo.operations.form
+    label: "Form"
+    entity_type: work_product
+    description: "Not a governance object."
+    source_confidence: draft
+relationships:
+  - id: demo.operations.proof-governed-by-form
+    subject: demo.operations.proof
+    predicate: governed_by
+    object: demo.operations.form
+    source_confidence: draft
+rules: []

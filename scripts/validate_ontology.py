@@ -19,6 +19,24 @@ from ontology_loader import iter_yaml, parse_yaml
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 PUBLIC_OR_ENFORCED_STATUSES = {"active", "approved", "owner_reviewed_internal", "prohibited"}
+
+# Bounded, evidence-supported domain/range constraints for a high-confidence
+# subset of the controlled predicate vocabulary. Each predicate may pin an
+# allowed set of subject and/or object entity_type values; an unpinned endpoint
+# stays vocabulary-checked only (see docs/conventions.md predicate table). These
+# are deliberately narrow — each constraint encodes semantics already true of
+# every live relationship, not speculative OWL-style class rules. Keys MUST be
+# members of the schema predicate enum (schemas/module.schema.json
+# $defs.predicateName); tests/run_predicates.py and the self-check in validate()
+# enforce that sync.
+PREDICATE_CONSTRAINTS: dict[str, dict[str, set[str]]] = {
+    # A measurement's subject is always a metric (the metric-modeling work, #30).
+    "measures": {"subject": {"metric"}},
+    # Something is "governed by" a governance object.
+    "governed_by": {"object": {"governance_object"}},
+    # A container is a system resource (a site, a Drive folder, …).
+    "contains": {"subject": {"system_resource"}},
+}
 SECRET_PATTERNS = [
     re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
@@ -67,6 +85,18 @@ def load_schema_registry(schema_dir: Path = SCHEMA_DIR) -> dict[str, dict]:
         if sid:
             registry[sid] = data
     return registry
+
+
+def schema_predicate_vocab(registry: dict[str, dict]) -> set[str]:
+    """Return the controlled predicate enum declared in module.schema.json.
+
+    Single source of truth for the vocabulary: PREDICATE_CONSTRAINTS keys and any
+    relationship `inverse` value are checked against this set so the schema and
+    the validator can never silently drift apart.
+    """
+    module_schema = registry.get(KIND_SCHEMA["ontology_module"], {})
+    enum = module_schema.get("$defs", {}).get("predicateName", {}).get("enum", [])
+    return {p for p in enum if isinstance(p, str)}
 
 
 def _matches_type(instance: Any, type_spec: Any) -> bool:
@@ -249,9 +279,23 @@ def validate(root: Path) -> list[str]:
             schema_validate(path, data, registry, schema_errors)
             errors.extend(f"{path}: schema: {msg}" for msg in schema_errors)
 
+    # Self-check: every constrained predicate must be part of the controlled
+    # vocabulary the schema enforces, so PREDICATE_CONSTRAINTS can never outlive
+    # a predicate the schema no longer accepts. Deterministic and dependency-free;
+    # tests/run_predicates.py asserts the same invariant plus live inverse names.
+    predicate_vocab = schema_predicate_vocab(registry)
+    if predicate_vocab:
+        for pred in PREDICATE_CONSTRAINTS:
+            if pred not in predicate_vocab:
+                errors.append(
+                    f"PREDICATE_CONSTRAINTS key {pred!r} is not in the schema predicate vocabulary "
+                    f"(schemas/module.schema.json $defs.predicateName)"
+                )
+
     all_ids: Counter[str] = Counter()
     module_ids: set[str] = set()
     entity_ids: set[str] = set()
+    entity_types: dict[str, str] = {}
     rule_ids: set[str] = set()
     client_ids: set[str] = set()
 
@@ -273,7 +317,10 @@ def validate(root: Path) -> list[str]:
         elif kind == "ontology_module":
             module_ids.add(data.get("id"))
             for ent in data.get("entities", []) or []:
-                if isinstance(ent, dict): entity_ids.add(ent.get("id"))
+                if isinstance(ent, dict):
+                    entity_ids.add(ent.get("id"))
+                    if isinstance(ent.get("entity_type"), str):
+                        entity_types[ent.get("id")] = ent.get("entity_type")
             for rule in data.get("rules", []) or []:
                 if isinstance(rule, dict): rule_ids.add(rule.get("id"))
         elif kind == "projection":
@@ -333,6 +380,22 @@ def validate(root: Path) -> list[str]:
                     value = rel.get(field)
                     if value not in entity_ids:
                         errors.append(f"{path}: relationship {rel.get('id')} references unknown {field}: {value}")
+                # Bounded domain/range check: for the high-confidence subset in
+                # PREDICATE_CONSTRAINTS, the resolved subject/object entity_type
+                # must be in the allowed set. Endpoints that don't resolve are
+                # already reported above; unpinned endpoints stay unconstrained.
+                constraint = PREDICATE_CONSTRAINTS.get(rel.get("predicate"))
+                if constraint:
+                    for field in ("subject", "object"):
+                        allowed = constraint.get(field)
+                        if not allowed:
+                            continue
+                        actual = entity_types.get(rel.get(field))
+                        if actual is not None and actual not in allowed:
+                            errors.append(
+                                f"{path}: relationship {rel.get('id')} predicate {rel.get('predicate')!r} "
+                                f"{field} entity_type {actual!r} not allowed (expected one of {sorted(allowed)})"
+                            )
                 if rel.get("source_confidence") == "verified" and not rel.get("evidence"):
                     errors.append(f"{path}: verified relationship lacks evidence: {rel.get('id')}")
             for rule in data.get("rules", []) or []:
