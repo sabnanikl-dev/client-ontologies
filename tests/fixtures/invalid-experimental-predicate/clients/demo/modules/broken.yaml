@@ -1,5 +1,5 @@
 # Invalid fixture: the experimental `x_` predicate escape must be a complete,
-# non-empty token (`^x_[a-z][a-z0-9_]*\Z`), not the bare prefix `x_`. A bare
+# non-empty token (`^x_[a-z][a-z0-9_]*(?![\s\S])`), not the bare prefix `x_`. A bare
 # `x_` (like `x_ ` with trailing space, or `x_` followed by a newline) is
 # arbitrary free-string drift and must fail the schema `anyOf` rather than
 # slip through the controlled-vocabulary escape hatch.

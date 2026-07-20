@@ -145,11 +145,16 @@ live relationship — they are intentionally narrow, not an OWL-style class laye
 
 To trial a predicate before committing it to the vocabulary, prefix it with
 `x_` (e.g. `x_amplifies`). The schema accepts a bounded `x_` **token** via the
-`predicate` `anyOf` branch — the pattern is `^x_[a-z][a-z0-9_]*\Z`, so the escape
-must be a complete, non-empty identifier (`x_` plus a lowercase letter, then
-lowercase alphanumerics/underscores). A bare `x_`, embedded whitespace, or a
-trailing newline is rejected — the escape hatch cannot reintroduce arbitrary
-free-string drift. Behavior of an `x_` predicate:
+`predicate` `anyOf` branch — the pattern is `^x_[a-z][a-z0-9_]*(?![\s\S])`, so the
+escape must be a complete, non-empty identifier (`x_` plus a lowercase letter, then
+lowercase alphanumerics/underscores). The trailing `(?![\s\S])` is an absolute-end
+negative lookahead: it anchors the token to the true end of string (unlike `$`,
+which would tolerate a trailing newline) using only ECMAScript-portable syntax, so
+the pattern behaves identically under the repo's Python evaluator and any
+Draft 2020-12 (ECMAScript-regex) engine — a Python-only anchor such as `\Z` is
+never used. A bare `x_`, embedded whitespace, or a trailing newline is rejected —
+the escape hatch cannot reintroduce arbitrary free-string drift. Behavior of an
+`x_` predicate:
 
 - it bypasses the controlled enum (it is *not* one of the reviewed vocabulary
   terms), so it carries no domain/range constraints and is never a `PREDICATE_CONSTRAINTS` key;

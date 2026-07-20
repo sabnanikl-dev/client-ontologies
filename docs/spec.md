@@ -590,10 +590,14 @@ predicates:
 ```
 
 **Experimental escape:** a predicate matching the bounded token pattern
-`^x_[a-z][a-z0-9_]*\Z` (e.g. `x_amplifies`) bypasses the enum for trialling,
-mirroring the `x_` field-extension escape. The token must be complete and
-non-empty — a bare `x_`, embedded whitespace, or a trailing newline is rejected,
-so the escape cannot reintroduce free-string drift. An `x_` predicate carries no
+`^x_[a-z][a-z0-9_]*(?![\s\S])` (e.g. `x_amplifies`) bypasses the enum for trialling,
+mirroring the `x_` field-extension escape. The trailing `(?![\s\S])` is an
+absolute-end negative lookahead — ECMAScript-portable syntax that pins the token to
+the true end of string and behaves identically under the repo's Python evaluator and
+any Draft 2020-12 (ECMAScript-regex) engine, without a Python-only anchor such as
+`\Z`. The token must be complete and non-empty — a bare `x_`, embedded whitespace, or
+a trailing newline is rejected, so the escape cannot reintroduce free-string drift.
+An `x_` predicate carries no
 domain/range constraints and is not a valid `inverse` value; promote it to a real
 enum member once it stabilises.
 

@@ -52,7 +52,7 @@
       "properties": {
         "id": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
         "subject": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
-        "predicate": {"anyOf": [{"$ref": "#/$defs/predicateName"}, {"type": "string", "pattern": "^x_[a-z][a-z0-9_]*\\Z"}]},
+        "predicate": {"anyOf": [{"$ref": "#/$defs/predicateName"}, {"type": "string", "pattern": "^x_[a-z][a-z0-9_]*(?![\\s\\S])"}]},
         "object": {"$ref": "https://client-ontologies.local/schemas/defs.schema.json#/$defs/id"},
         "cardinality": {"enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many", "unknown"]},
         "inverse": {"$ref": "#/$defs/predicateName"},
