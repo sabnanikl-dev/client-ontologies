@@ -28,6 +28,8 @@ entities:
     evidence:
       - source_id: femme-local-seo-sot
         lines: "44-57,121-148"
+        snapshot_date: "2026-07-19"
+        content_hash: "sha256:utf8-lf-v1:63cec4dc952d18d817b8c0b1037db009cc75ea1c590744a378166d848ec36e90"
   - id: femme-events.visibility.service-area
     label: "Femme Events service area"
     entity_type: business_object
@@ -43,6 +45,8 @@ entities:
     evidence:
       - source_id: femme-local-seo-sot
         lines: "59-89"
+        snapshot_date: "2026-07-19"
+        content_hash: "sha256:utf8-lf-v1:9c1f94a014823df9aa2c9d032326a9596033315c61b71c18956bf331c54012c2"
   - id: femme-events.visibility.google-business-profile
     label: "Femme Events Google Business Profile"
     entity_type: system_resource
@@ -159,6 +163,8 @@ rules:
     evidence:
       - source_id: femme-local-seo-sot
         lines: "59-89"
+        snapshot_date: "2026-07-19"
+        content_hash: "sha256:utf8-lf-v1:9c1f94a014823df9aa2c9d032326a9596033315c61b71c18956bf331c54012c2"
   - id: femme-events.visibility.public-account-mutations-require-approval
     title: "Public visibility account mutations require approval"
     status: active

@@ -137,6 +137,19 @@ approved_claims:
         lines: "44-56,91-101"
 ```
 
+An evidence reference may additionally carry two optional **portable anchors** so a
+citation can be verified, not just pointed at: `snapshot_date` (the `YYYY-MM-DD` the
+span was last confirmed) and `content_hash`, a versioned SHA-256 of the cited lines
+in the exact form `sha256:utf8-lf-v1:<64 lowercase hex>`. `utf8-lf-v1` decodes the
+source as UTF-8, normalizes CRLF/CR to LF, selects the 1-based inclusive `lines`
+range(s), joins them with `\n` (no trailing newline), and SHA-256s the bytes — so a
+line-ending-only change does not create false drift, and any future normalization
+must use a new version tag. `scripts/check_evidence.py` re-hashes anchored spans and
+reports drift; a repo-relative anchor is verified *portably* (any checkout/CI) while
+an available external absolute path is verified *environment-locally* only (see §14.4
+for that distinction and `docs/conventions.md` for the anchor-vs-vendor policy). Both
+fields are optional and existing citations validate unchanged.
+
 ### 2.3 Authoring source and runtime stores are separate
 
 Canonical authoring source in v0:
@@ -251,11 +264,13 @@ client-ontologies/
     ontology_loader.py     # shared YAML parse + manifest-first enumeration
     validate_ontology.py   # canonical gate: schema then cross-reference pass
     check_rules.py         # machine_check guardrail engine (library + CLI)
+    check_evidence.py      # evidence-health / content_hash checker (library + CLI)
     export_sqlite.py       # runtime SQLite projection
   tests/
     run_fixtures.py        # invalid fixtures must fail validation
     run_export.py          # valid fixture must validate + export
     run_checks.py          # guardrail engine matching + exit semantics
+    run_evidence.py        # evidence-health hashing + strict exit semantics
     fixtures/
   .github/
     workflows/
@@ -312,9 +327,10 @@ The contract is split by resource `kind`: `client.schema.json`, `manifest.schema
 
 The live tooling: `ontology_loader.py` (shared manifest-first YAML enumeration used by
 both the validator and exporter), `validate_ontology.py` (the canonical gate),
-`check_rules.py` (the `machine_check` guardrail engine, importable and CLI), and
-`export_sqlite.py` (the runtime SQLite projection). All are stdlib-only and shell out to
-`ruby -e` for YAML parsing, so the repo carries no pip/gem dependencies.
+`check_rules.py` (the `machine_check` guardrail engine, importable and CLI),
+`check_evidence.py` (the evidence-health / `content_hash` checker, importable and CLI),
+and `export_sqlite.py` (the runtime SQLite projection). All are stdlib-only and shell out
+to `ruby -e` for YAML parsing, so the repo carries no pip/gem dependencies.
 
 #### `clients/<client-id>/`
 
@@ -1384,6 +1400,41 @@ def assert_transition_allowed(old: str, new: str) -> None:
     if new not in ALLOWED_TRANSITIONS.get(old, set()):
         raise ValueError(f"Illegal status transition: {old} -> {new}")
 ```
+
+### 14.4 Generic evidence health check
+
+`scripts/check_evidence.py` (stdlib-only, CLI + library) verifies the portable
+citation anchors from §2.2. It reports at **two independent levels**, never
+conflated or double-counted:
+
+- **Sources** — one row per registry source that declares a `path`, *whether or not
+  any citation references it*, so an uncited-but-declared source is still visible.
+  Categories: `present`, `missing` (a repo-relative path that does not exist —
+  strict-gating), and `unavailable_in_environment` (an external absolute path
+  unavailable here — advisory). Existence, not file-ness: a directory used as a
+  provenance pointer counts as `present`.
+- **Citations** — one row per `evidence` ref. Where a `content_hash` anchor is
+  present the cited span is re-hashed under `utf8-lf-v1`; categories: `verified_match`,
+  `content_drift`, `source_missing`, `anchor_missing`, `invalid_range`,
+  `unsupported_hash_version`, or `unresolvable_in_environment`.
+
+Verification is **portable vs environment-local**, and the tool never overclaims:
+only repo-relative sources (relative paths, or absolute paths that resolve inside the
+repo root) are verified *portably* (any checkout/CI) — reported with
+`scope: portable`. An available external absolute path is verified
+*environment-locally* only: it is hashed and reported `verified_match` /
+`content_drift` with `scope: environment_local` — a real check on this machine, but
+never presented as a portable/CI guarantee. An external absolute path unavailable
+here is `unresolvable_in_environment` (citation) / `unavailable_in_environment`
+(source) and stays **advisory** — never collapsed into a false `verified_match`.
+
+Exit behavior: without `--strict` the command is a pure report (exit 0); with
+`--strict` it exits 1 only on a genuine failure — citation `content_drift`,
+`source_missing`, `invalid_range`, `unsupported_hash_version`, or source `missing` —
+and never on the advisory categories, so an unknown `--client` is a usage error
+(exit 2). This is why the CI step can run `--strict` and still be non-blocking for
+owner-only source paths. `docs/conventions.md` documents the anchor-vs-vendor
+decision and the re-confirmation workflow.
 
 ---
 
