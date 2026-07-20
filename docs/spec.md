@@ -268,13 +268,17 @@ client-ontologies/
     export_sqlite.py       # runtime SQLite projection
   tests/
     run_fixtures.py        # invalid fixtures must fail validation
+    run_predicates.py      # predicate enum/constraint/inverse sync
     run_export.py          # valid fixture must validate + export
+    run_competency.py      # outcome regression: projection-scoped competency answers
     run_checks.py          # guardrail engine matching + exit semantics
     run_evidence.py        # evidence-health hashing + strict exit semantics
+    competency/
+      questions.yaml       # test-owned competency registry (not a canonical kind)
     fixtures/
   .github/
     workflows/
-      validate.yml         # CI: validate, export, and run all three test runners
+      validate.yml         # CI: validate, export, then run all six regression runners
   clients/
     femme-events/
       client.yaml

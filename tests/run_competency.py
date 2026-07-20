@@ -15,11 +15,14 @@ normalized answer to the expected answer stored in the registry.
 Design contract (issue #31):
   * Reuses #21's shared loader/export path; adds no second YAML parser.
   * Builds the SQLite export in a temp dir; never touches the repo's build/.
-  * Scopes strictly through the named projection — an ``entities``/``rules``
-    query considers only entities/rules whose module is in the projection's
-    ``includes.modules`` or whose id is named (or ``.*``-matched) in
-    ``includes.entities``/``includes.rules``. It never scans other clients or
-    unlisted-and-unreferenced modules.
+  * Scopes each query's RESULTS strictly through the named projection. The shared
+    export parses every client's canonical YAML (it is a full canonical export,
+    not a projection-directed load); isolation is therefore a property of the
+    ANSWER, not of file loading. An ``entities``/``rules`` query surfaces a row
+    only if it belongs to the question's ``client_id`` AND its module is in the
+    projection's ``includes.modules`` or its id is named (or ``.*``-matched) in
+    ``includes.entities``/``includes.rules``. No other client's rows and no
+    unlisted-and-unreferenced module's rows can appear in an answer.
   * Deterministic: no network, model, API credential, or live-client call; rows
     and lists are sorted before comparison and output.
   * Emits a human-readable report by default and machine JSON with ``--json``;
@@ -67,6 +70,21 @@ OP_TABLE = {
     "rules": ("rules", "rule_id", {"rule_id", "module_id", "title", "status", "severity", "rule_type", "statement", "source_confidence"}),
 }
 
+# Plain columns a query may filter/select on, per op (the ``select`` list also
+# accepts a ``fields.<name>`` raw_json path; nothing else is a valid token).
+OP_COLUMNS = {op: cols for op, (_t, _id, cols) in OP_TABLE.items()}
+
+# Per-guard operand contract. Each required operand carries a shape check so a
+# misspelled operand (e.g. ``prefix`` for ``prefixes``) becomes a loud registry
+# error rather than a silent no-op. ``value`` may be any type, so it is
+# presence-only.
+GUARD_REQUIRED = {
+    "require_status": {"statuses": "nonempty_str_list"},
+    "forbid_status": {"statuses": "nonempty_str_list"},
+    "require_field_equals": {"field": "nonempty_str", "value": "present"},
+    "forbid_id_prefix": {"prefixes": "nonempty_str_list"},
+}
+
 
 class QuestionError(Exception):
     """A malformed registry entry (usage error, not a data-answer failure)."""
@@ -75,39 +93,160 @@ class QuestionError(Exception):
 # --------------------------------------------------------------------------- #
 # Registry loading
 # --------------------------------------------------------------------------- #
+def _q_err(source: str, qid: Any, msg: str) -> None:
+    raise QuestionError(f"{source}: question {qid!r}: {msg}")
+
+
+def _check_operand(source: str, qid: Any, guard: dict[str, Any], key: str, kind: str) -> None:
+    """Enforce a guard operand's presence and shape (empty/typo operands fail)."""
+    if key not in guard:
+        _q_err(source, qid, f"guard {guard.get('type')!r} missing required operand {key!r}")
+    if kind == "present":
+        return
+    val = guard[key]
+    if kind == "nonempty_str_list":
+        if not isinstance(val, list) or not val or not all(isinstance(x, str) for x in val):
+            _q_err(source, qid, f"guard {guard.get('type')!r} operand {key!r} must be a non-empty list of strings")
+    elif kind == "nonempty_str":
+        if not isinstance(val, str) or not val:
+            _q_err(source, qid, f"guard {guard.get('type')!r} operand {key!r} must be a non-empty string")
+
+
+def _validate_guard(source: str, qid: Any, guard: Any) -> None:
+    """Validate one guard: known type, no stray operands, required operands present + shaped."""
+    if not isinstance(guard, dict):
+        _q_err(source, qid, "each guard must be a mapping")
+    gtype = guard.get("type")
+    if gtype not in KNOWN_GUARDS:
+        _q_err(source, qid, f"unknown guard type: {gtype!r} (known: {sorted(KNOWN_GUARDS)})")
+    required = GUARD_REQUIRED[gtype]
+    allowed = {"type", *required.keys()}
+    unknown = sorted(k for k in guard if k not in allowed and not k.startswith("x_"))
+    if unknown:
+        _q_err(source, qid, f"guard {gtype!r} has unknown operand(s) {unknown}; required {sorted(required)}")
+    for key, kind in required.items():
+        _check_operand(source, qid, guard, key, kind)
+
+
+def _validate_query(source: str, qid: Any, query: Any) -> tuple[str, Optional[set]]:
+    """Validate a query's discriminated shape; return ``(op, output_keys)``.
+
+    ``output_keys`` is the set of column keys a row answer will carry (None for
+    ``projection_resources``). Unknown ops, stray keys, invalid filter/select
+    columns, and duplicate output keys all fail here — so a typo can never
+    resolve to a silent ``None`` at query time.
+    """
+    if not isinstance(query, dict):
+        _q_err(source, qid, f"'query' must be a mapping, got {type(query).__name__}")
+    op = query.get("op")
+    if op not in KNOWN_OPS:
+        _q_err(source, qid, f"unknown query op: {op!r} (known: {sorted(KNOWN_OPS)})")
+
+    if op == "projection_resources":
+        stray = sorted(k for k in query if k != "op" and not k.startswith("x_"))
+        if stray:
+            _q_err(source, qid, f"projection_resources query takes no operand(s) {stray}")
+        return op, None
+
+    stray = sorted(k for k in query if k not in {"op", "filters", "select"} and not k.startswith("x_"))
+    if stray:
+        _q_err(source, qid, f"{op} query has unknown key(s) {stray}")
+    columns = OP_COLUMNS[op]
+
+    filters = query.get("filters")
+    if filters is not None:
+        if not isinstance(filters, dict):
+            _q_err(source, qid, "'filters' must be a mapping")
+        for col in filters:
+            if col not in columns:
+                _q_err(source, qid, f"filter column {col!r} is not a valid {op} column {sorted(columns)}")
+
+    select = query.get("select")
+    if not isinstance(select, list) or not select or not all(isinstance(t, str) for t in select):
+        _q_err(source, qid, "'select' must be a non-empty list of column tokens")
+    output_keys: list[str] = []
+    for tok in select:
+        if tok.startswith("fields."):
+            if not tok.split(".", 1)[1]:
+                _q_err(source, qid, f"select token {tok!r} names no field")
+        elif tok not in columns:
+            _q_err(source, qid, f"select token {tok!r} is not a valid {op} column {sorted(columns)} and is not a 'fields.<name>' path")
+        key = _output_key(tok)
+        if key in output_keys:
+            _q_err(source, qid, f"select produces duplicate output key {key!r}")
+        output_keys.append(key)
+    return op, set(output_keys)
+
+
+def _validate_expect(source: str, qid: Any, op: str, output_keys: Optional[set], expect: Any) -> None:
+    """Validate the expect payload against the op and the query's output keys."""
+    if not isinstance(expect, dict):
+        _q_err(source, qid, "'expect' must be a mapping")
+    if op == "projection_resources":
+        resources = expect.get("resources")
+        if not isinstance(resources, dict):
+            _q_err(source, qid, "projection_resources question must define expect.resources as a mapping")
+        for key, val in resources.items():
+            if key not in {"modules", "entities", "rules"}:
+                _q_err(source, qid, f"expect.resources has unknown key {key!r} (allowed: modules/entities/rules)")
+            if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+                _q_err(source, qid, f"expect.resources.{key} must be a list of strings")
+        return
+    rows = expect.get("rows")
+    if not isinstance(rows, list):
+        _q_err(source, qid, f"{op} question must define expect.rows as a list")
+    for row in rows:
+        if not isinstance(row, dict):
+            _q_err(source, qid, "each expect.rows entry must be a mapping")
+        keys = set(row.keys())
+        if keys != output_keys:
+            _q_err(source, qid, f"expect row keys {sorted(keys)} do not match select output keys {sorted(output_keys or [])}")
+
+
+def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
+    """Shape-check an already-parsed registry document; return its questions.
+
+    Raises QuestionError on any structural defect — a non-mapping registry,
+    missing/duplicate identity fields, an unknown/malformed query, an unknown or
+    misspelled guard operand, a select token that is not a real column, duplicate
+    output keys, or an expect payload whose keys/types do not match the query. A
+    broken registry therefore fails as a usage error BEFORE evaluation instead of
+    silently passing a plausible false-positive answer.
+    """
+    if not isinstance(doc, dict):
+        raise QuestionError(f"{source}: registry must be a mapping")
+    questions = doc.get("questions")
+    if not isinstance(questions, list) or not questions:
+        raise QuestionError(f"{source}: registry must define a non-empty 'questions' list")
+    seen: set[str] = set()
+    for q in questions:
+        if not isinstance(q, dict):
+            raise QuestionError(f"{source}: each question must be a mapping")
+        for field in ("id", "client_id", "projection", "query"):
+            if not q.get(field):
+                raise QuestionError(f"{source}: question missing required field {field!r}: {q.get('id')!r}")
+        qid = q["id"]
+        if qid in seen:
+            raise QuestionError(f"{source}: duplicate question id: {qid}")
+        seen.add(qid)
+        op, output_keys = _validate_query(source, qid, q["query"])
+        _validate_expect(source, qid, op, output_keys, q.get("expect") or {})
+        guards = q.get("guards")
+        if guards is not None and not isinstance(guards, list):
+            _q_err(source, qid, "'guards' must be a list")
+        for guard in guards or []:
+            _validate_guard(source, qid, guard)
+    return questions
+
+
 def load_questions(path: Path = DEFAULT_QUESTIONS) -> list[dict[str, Any]]:
     """Parse the competency registry through the shared loader and shape-check it.
 
     Returns the list of question dicts. Raises QuestionError on a structurally
-    malformed registry (missing questions list, missing identity fields, unknown
-    op/guard) so a broken registry fails fast instead of silently passing.
+    malformed registry (see ``validate_questions``) so a broken registry fails
+    fast instead of silently passing.
     """
-    doc = parse_yaml(path)
-    questions = doc.get("questions")
-    if not isinstance(questions, list) or not questions:
-        raise QuestionError(f"{path}: registry must define a non-empty 'questions' list")
-    seen: set[str] = set()
-    for q in questions:
-        if not isinstance(q, dict):
-            raise QuestionError(f"{path}: each question must be a mapping")
-        for field in ("id", "client_id", "projection", "query"):
-            if not q.get(field):
-                raise QuestionError(f"{path}: question missing required field {field!r}: {q.get('id')!r}")
-        qid = q["id"]
-        if qid in seen:
-            raise QuestionError(f"{path}: duplicate question id: {qid}")
-        seen.add(qid)
-        op = (q.get("query") or {}).get("op")
-        if op not in KNOWN_OPS:
-            raise QuestionError(f"{path}: question {qid} has unknown query op: {op!r}")
-        if op in ("entities", "rules") and (q.get("expect") or {}).get("rows") is None:
-            raise QuestionError(f"{path}: question {qid} ({op}) must define expect.rows")
-        if op == "projection_resources" and (q.get("expect") or {}).get("resources") is None:
-            raise QuestionError(f"{path}: question {qid} (projection_resources) must define expect.resources")
-        for guard in q.get("guards") or []:
-            if guard.get("type") not in KNOWN_GUARDS:
-                raise QuestionError(f"{path}: question {qid} has unknown guard type: {guard.get('type')!r}")
-    return questions
+    return validate_questions(parse_yaml(path), str(path))
 
 
 # --------------------------------------------------------------------------- #
@@ -456,9 +595,93 @@ def run_drift_regression(base_db: Path, questions: list[dict[str, Any]], tmpdir:
 
 
 # --------------------------------------------------------------------------- #
+# Registry shape-validation regression (the malformed-registry negative case)
+# --------------------------------------------------------------------------- #
+def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
+    """Malformed (and one valid) registry documents for the shape-validator.
+
+    Each tuple is ``(name, doc, expected_substring)``. A malformed doc names the
+    substring its QuestionError must contain; the lone valid control uses
+    ``None`` (must NOT raise). These lock the exact false-passes the reviewers
+    reproduced: a non-mapping query, an unknown select column, a misspelled guard
+    operand, an unknown filter column, duplicate output keys, a wrong-typed
+    expect payload, a missing guard operand, an expected-row key typo, and a
+    projection_resources question missing its resources.
+    """
+    def q(**over: Any) -> dict[str, Any]:
+        base: dict[str, Any] = {
+            "id": "probe.q",
+            "client_id": "c",
+            "projection": "p",
+            "query": {"op": "entities", "filters": {"entity_type": "metric"}, "select": ["entity_id", "status"]},
+            "expect": {"rows": [{"entity_id": "c.x", "status": "draft"}]},
+        }
+        base.update(over)
+        return base
+
+    def doc(question: dict[str, Any]) -> dict[str, Any]:
+        return {"questions": [question]}
+
+    return [
+        # Valid control — the shape validator must accept a well-formed question.
+        ("valid-control", doc(q(guards=[{"type": "forbid_id_prefix", "prefixes": ["other"]}])), None),
+        # Reviewer A / Auditor follow-up: a non-mapping query (`query: nope`) must
+        # be a QuestionError, not an AttributeError traceback.
+        ("query-not-a-mapping", doc(q(query="nope")), "'query' must be a mapping"),
+        # Reviewer A: a misspelled select token (`statsu`) must not resolve to None.
+        ("unknown-select-column", doc(q(query={"op": "entities", "select": ["entity_id", "statsu"]})), "statsu"),
+        # Reviewer A exact repro: `prefix` instead of `prefixes` must be rejected.
+        ("misspelled-guard-operand", doc(q(guards=[{"type": "forbid_id_prefix", "prefix": ["c"]}])), "unknown operand"),
+        # A filter on a non-column must fail loudly, not silently drop the filter.
+        ("unknown-filter-column", doc(q(query={"op": "entities", "filters": {"entity_typ": "metric"}, "select": ["entity_id"]})), "filter column"),
+        # Two tokens collapsing to the same output key is ambiguous → reject.
+        ("duplicate-output-key", doc(q(query={"op": "rules", "select": ["status", "fields.status"]}, expect={"rows": []})), "duplicate output key"),
+        # expect.rows must be a list, not a mapping.
+        ("expect-rows-wrong-type", doc(q(expect={"rows": {}})), "expect.rows as a list"),
+        # A guard missing its required operand is a no-op false-pass → reject.
+        ("guard-missing-operand", doc(q(guards=[{"type": "require_status"}])), "missing required operand"),
+        # Reviewer A: an expected-row typo matching a real column must be caught
+        # even when the select tokens are valid.
+        ("expect-row-key-typo", doc(q(expect={"rows": [{"entity_id": "c.x", "statsu": "draft"}]})), "do not match select output keys"),
+        # projection_resources must define expect.resources (not rows).
+        ("projection-resources-missing", doc(q(query={"op": "projection_resources"}, expect={"rows": []})), "expect.resources"),
+    ]
+
+
+def run_registry_negative_probes() -> dict[str, Any]:
+    """Prove the shape validator rejects every reproduced false-pass registry.
+
+    Deterministic, in-memory, no export needed. Passes iff each malformed probe
+    raises QuestionError with its expected diagnostic and the valid control is
+    accepted.
+    """
+    cases: list[dict[str, Any]] = []
+    passed = True
+    for name, document, expected_sub in _negative_probe_docs():
+        raised: Optional[str] = None
+        try:
+            validate_questions(document, "<probe>")
+        except QuestionError as exc:
+            raised = str(exc)
+        if expected_sub is None:
+            ok = raised is None
+        else:
+            ok = raised is not None and expected_sub in raised
+        passed = passed and ok
+        cases.append({
+            "name": name,
+            "expected_substring": expected_sub,
+            "rejected": raised is not None,
+            "ok": ok,
+            "detail": raised if raised is not None else "(accepted)",
+        })
+    return {"passed": passed, "cases": cases}
+
+
+# --------------------------------------------------------------------------- #
 # Reporting + CLI
 # --------------------------------------------------------------------------- #
-def _print_human(results: list[dict[str, Any]], drift: dict[str, Any]) -> None:
+def _print_human(results: list[dict[str, Any]], drift: dict[str, Any], probes: dict[str, Any]) -> None:
     print("Competency questions\n" + "=" * 20)
     for r in results:
         mark = "PASS" if r["status"] == "pass" else "FAIL"
@@ -475,6 +698,11 @@ def _print_human(results: list[dict[str, Any]], drift: dict[str, Any]) -> None:
         mark = "PASS" if case["isolated"] else "FAIL"
         print(f"[{mark}] {case['name']}: expected only {case['expected_failed']} to fail; "
               f"actual failed = {case['actual_failed']}")
+    print("\nRegistry shape-validation regression\n" + "-" * 36)
+    for case in probes["cases"]:
+        mark = "PASS" if case["ok"] else "FAIL"
+        want = "accepted" if case["expected_substring"] is None else f"rejected ~ {case['expected_substring']!r}"
+        print(f"[{mark}] {case['name']}: expected {want}")
 
 
 def run(argv: Optional[list] = None) -> int:
@@ -494,6 +722,10 @@ def run(argv: Optional[list] = None) -> int:
         print(json.dumps({"error": str(exc)}) if args.json else f"registry error: {exc}", file=sys.stderr)
         return 2
 
+    # Self-check the shape validator itself: every reproduced false-pass registry
+    # must be rejected (and the valid control accepted) before we trust any answer.
+    probes = run_registry_negative_probes()
+
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
         db_path = _export_temp(root, tmpdir)
@@ -501,7 +733,7 @@ def run(argv: Optional[list] = None) -> int:
         drift = {"passed": True, "cases": []} if args.no_drift else run_drift_regression(db_path, questions, tmpdir)
 
     failed_required = [r for r in results if r["status"] == "fail" and r["required"]]
-    exit_code = 1 if (failed_required or not drift["passed"]) else 0
+    exit_code = 1 if (failed_required or not drift["passed"] or not probes["passed"]) else 0
 
     if args.json:
         print(json.dumps(
@@ -511,20 +743,24 @@ def run(argv: Optional[list] = None) -> int:
                 "questions_failed": sum(1 for r in results if r["status"] == "fail"),
                 "results": results,
                 "drift_regression": drift,
+                "registry_probes": probes,
                 "exit_code": exit_code,
             },
             ensure_ascii=False,
             indent=2,
         ))
     else:
-        _print_human(results, drift)
+        _print_human(results, drift, probes)
         if exit_code == 0:
-            print(f"\nall {len(results)} competency question(s) passed; drift isolation holds")
+            print(f"\nall {len(results)} competency question(s) passed; drift isolation + registry shape checks hold")
         else:
             if failed_required:
                 print(f"\nFAILED: {len(failed_required)} required competency question(s) failed", file=sys.stderr)
             if not drift["passed"]:
                 print("FAILED: drift-isolation regression did not isolate to one question", file=sys.stderr)
+            if not probes["passed"]:
+                bad = [c["name"] for c in probes["cases"] if not c["ok"]]
+                print(f"FAILED: registry shape-validation regression did not reject/accept as expected: {bad}", file=sys.stderr)
     return exit_code
 
 
