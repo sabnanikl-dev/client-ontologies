@@ -539,11 +539,18 @@ relationships:
         lines: "406-418"
 ```
 
-### 7.2 Compact triple form
+### 7.2 Compact triple form (illustrative only — not accepted by the v0.1 schema)
 
-For simple modules, triples are acceptable:
+> **Not implemented.** The compact `triples` form below is illustrative shorthand
+> for discussing relationships in prose. It is **not** a canonical module shape:
+> `schemas/module.schema.json` defines no top-level `triples` property and keeps
+> `additionalProperties: false`, so a module using this form is rejected by
+> `scripts/validate_ontology.py`. Author relationships with the implemented
+> `relationships` object (§7.1). Adopting a compact form would require a
+> deliberate schema PR and is out of scope for v0.1.
 
 ```yaml
+# Illustrative shorthand only — NOT a valid module. Use the §7.1 `relationships` object.
 triples:
   - [InventoryImage, creates_or_updates, SanityAsset]
   - [SanityAsset, renders_in, ShowroomCard]
@@ -582,10 +589,13 @@ predicates:
   - uses
 ```
 
-**Experimental escape:** a predicate prefixed with `x_` (e.g. `x_amplifies`)
-bypasses the enum for trialling, mirroring the `x_` field-extension escape. An
-`x_` predicate carries no domain/range constraints and is not a valid `inverse`
-value; promote it to a real enum member once it stabilises.
+**Experimental escape:** a predicate matching the bounded token pattern
+`^x_[a-z][a-z0-9_]*\Z` (e.g. `x_amplifies`) bypasses the enum for trialling,
+mirroring the `x_` field-extension escape. The token must be complete and
+non-empty — a bare `x_`, embedded whitespace, or a trailing newline is rejected,
+so the escape cannot reintroduce free-string drift. An `x_` predicate carries no
+domain/range constraints and is not a valid `inverse` value; promote it to a real
+enum member once it stabilises.
 
 **Bounded domain/range (semantic validation).** Beyond the enum, a small,
 high-confidence subset in `scripts/validate_ontology.py` `PREDICATE_CONSTRAINTS`

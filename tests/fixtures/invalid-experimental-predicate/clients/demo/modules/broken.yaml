@@ -1,0 +1,35 @@
+# Invalid fixture: the experimental `x_` predicate escape must be a complete,
+# non-empty token (`^x_[a-z][a-z0-9_]*\Z`), not the bare prefix `x_`. A bare
+# `x_` (like `x_ ` with trailing space, or `x_` followed by a newline) is
+# arbitrary free-string drift and must fail the schema `anyOf` rather than
+# slip through the controlled-vocabulary escape hatch.
+schema_version: "0.1"
+kind: ontology_module
+id: demo.brand
+title: "Demo brand"
+client_id: demo
+status: active
+workstreams: [brand]
+evidence_sources:
+  - id: demo-src
+    type: local_project_doc
+    path: "docs/demo.md"
+    description: "Demo source."
+entities:
+  - id: demo.brand.voice
+    label: "Voice"
+    entity_type: brand_object
+    description: "Brand voice."
+    source_confidence: draft
+  - id: demo.brand.palette
+    label: "Palette"
+    entity_type: brand_object
+    description: "Brand palette."
+    source_confidence: draft
+relationships:
+  - id: demo.brand.voice-x-palette
+    subject: demo.brand.voice
+    predicate: "x_"
+    object: demo.brand.palette
+    source_confidence: draft
+rules: []

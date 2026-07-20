@@ -33,6 +33,7 @@ CASES = [
     ("bad-content-hash", "does not match pattern"),
     # Predicate vocabulary (schema enum) rejections.
     ("bad-predicate", "predicate: did not satisfy any of anyOf"),
+    ("invalid-experimental-predicate", "predicate: did not satisfy any of anyOf"),
     ("invalid-inverse", "inverse: 'not_a_real_predicate' not one of"),
     # Bounded predicate domain/range (semantic pass) rejections.
     ("invalid-constrained-subject", "predicate 'measures' subject entity_type 'brand_object' not allowed"),
