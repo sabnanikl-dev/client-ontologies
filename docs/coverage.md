@@ -15,18 +15,26 @@ than papered over with an invented canonical fact (AGENTS.md core rule 3).
 
 ## Coverage status vocabulary
 
-Each `(family, client)` cell carries exactly one status:
+Each row-cell carries **exactly one** status token from this controlled
+vocabulary. Where a family splits into a genuinely covered part and a gap/deferred
+part, it is broken into separate sub-rows so no cell ever combines two statuses;
+all nuance (planning-only, representation notes) lives in the basis column, never
+in the status column.
 
 | status | meaning |
 | --- | --- |
-| `covered` | the ontology contains evidence-backed resources that answer the family's question; where marked, a competency question proves the answer against the canonical export |
+| `covered` | the ontology contains evidence-backed resources that answer the family's question **and** a competency question retrieves that answer against the canonical export (cited in the basis column) |
 | `known gap` | the concept is in scope for this client but not yet modeled with sufficient evidence; a real client fact is missing, not merely unqueried |
 | `not applicable` | the family does not apply to this client's business (no gap to close) |
 | `deferred / trigger-gated` | intentionally postponed until a concrete trigger (e.g. launch, a captured metric snapshot, a proven consumer need) — tracked, not forgotten |
 
-A `covered` claim is only credible when a competency question can retrieve the
-answer. Cited question ids below are the proof; a family marked `covered` with no
-citation is representation-level only and is called out as such.
+`covered` is a *proof-carrying* status: it is used **only** when a competency
+question in `tests/competency/questions.yaml` retrieves the answer, and the basis
+column cites that question id. A resource that exists in the model but has no
+competency proof is **not** marked `covered` — it is recorded as the honest status
+it has earned (e.g. `known gap` when the client fact itself is missing). This keeps
+the status column from conflating *model representation* with *client coverage*
+(see the three maturity dimensions below).
 
 ## Coverage matrix
 
@@ -39,10 +47,12 @@ Families follow issue #41 §1. Citations are competency-question ids in
 | --- | --- | --- |
 | Business identity, offerings, audiences, operating constraints | `covered` | `brand.identity`, `website.service-package` (offering), `visibility.service-area` (audience/area); approval constraints proven by `public-mutation-approval-rules` and grounding proven by `gbp-grounded-in-owner-reviewed-fact` |
 | People/roles & durable responsibility boundaries | `known gap` | `operations.approval-boundary.applies_to` names *what* is gated, but there is no named owner-roles entity (contrast JMD's `operations.owner-roles`); who approves is not yet a modeled, evidence-backed resource |
-| Systems, repositories, domains, environments, systems of record | `covered` | `visibility.google-business-profile` and `website.site` are `system_resource`s; `visibility.business-fact` is the local system-of-record fact, proven in `gbp-grounded-in-owner-reviewed-fact` |
-| Integrations & data flows between systems | `covered` | metric→system measurement flow proven by `outcome-metrics-measure-gbp-system`; content flow proven by the multi-hop `cms-content-renders-to-service-package-path` |
-| Workflows, actions, state transitions, approval boundaries | `covered` (approval) / `known gap` (explicit state machines) | approval workflow proven by `public-mutation-approval-rules`; `operations.photo-proof-inventory` is a `proposed` workflow artifact; no explicit `state_machine` is modeled for Femme yet |
-| Metric definitions, sources, cadence, planning-vs-observed status | `covered` (definitions, planning-only) / `deferred / trigger-gated` (observed values) | three `draft` metrics with `baseline: unknown`, proven planning-only by `local-visibility-outcome-metrics`; observed values are trigger-gated on a real read-only snapshot |
+| Systems, repositories, domains, environments, systems of record | `covered` | `visibility.google-business-profile` (`system_resource`) and `website.site` (verified `system_resource`); `visibility.business-fact` is the local owner-reviewed system-of-record fact, retrieved in `gbp-grounded-in-owner-reviewed-fact` |
+| Integrations & data flows between systems | `covered` | the verified website integration flow (Sanity CMS content → site, site → inquiry form) is proven by `website-content-data-flow` and the multi-hop content flow by `cms-content-renders-to-service-package-path`. The metric→GBP measurement edges are **planning-only** (`draft`, no evidence), proven to stay draft by the optional `outcome-metrics-measure-gbp-planning-only` — they are *not* counted as a source-backed integration answer |
+| Workflows & approval boundaries | `covered` | approval workflow proven by `public-mutation-approval-rules`; `operations.photo-proof-inventory` is a `proposed` workflow artifact |
+| Explicit workflow state machines | `known gap` | no explicit `state_machine` is modeled for Femme yet (contrast JMD's `inventory-images`) |
+| Metric definitions (planning-only) | `covered` | three `draft` metrics with `baseline: unknown`, proven planning-only by `local-visibility-outcome-metrics` |
+| Observed metric values | `deferred / trigger-gated` | trigger-gated on a real read-only GBP snapshot; no achieved numbers are recorded or implied |
 | Maintenance ownership, handoff responsibilities, lifecycle posture | `known gap` | lifecycle posture is partially carried by status vocabulary, but there is no handoff module (spec §4.1 lists `handoff/` as *Proposed*); handoff responsibilities are not yet modeled |
 
 ### JMD Menswear (`jmd-menswear`)
@@ -50,9 +60,9 @@ Families follow issue #41 §1. Citations are competency-question ids in
 | Question family | Status | Basis / proof |
 | --- | --- | --- |
 | Business identity, offerings, audiences, operating constraints | `covered` | `brand.identity`/`brand.differentiator`, `website.garment-category` (offering); the showroom-not-ecommerce and live-change constraints proven by `ecommerce-and-live-change-guardrails` and `approval-boundary-governs-site` |
-| People/roles & durable responsibility boundaries | `covered` (representation) / competency gap | `operations.owner-roles` (Lucky, Danny) is modeled as a `governance_object`; no competency question yet asserts the role split, so the proof is representation-level only |
-| Systems, repositories, domains, environments, systems of record | `covered` | `inventory.drive-folder` and `website.site` are `system_resource`s; Sanity is the published system of record (`inventory.sanity-asset`), traversed in `inventory-image-pipeline-path` |
-| Integrations & data flows between systems | `covered` (planning-only) | the Drive→Sanity→showroom pipeline proven by the bounded multi-hop `inventory-image-pipeline-path`; every edge is `draft`, i.e. proposed MVP architecture, not shipped |
+| People/roles & durable responsibility boundaries | `covered` | the verified `operations.owner-roles` (Lucky leads relationships/brand; Danny leads inventory/purchasing/sales) is retrieved and proven verified by `owner-role-responsibility-split` |
+| Systems, repositories, domains, environments, systems of record | `covered` | `website.site` is a verified `system_resource` (the current live surface), retrieved as the governed object in `approval-boundary-governs-site`. The Drive/Sanity systems (`inventory.drive-folder`, `inventory.sanity-asset`) are **proposed/`draft`** MVP pipeline targets, not a current system of record; they are traversed only as draft in `inventory-image-pipeline-path` |
+| Integrations & data flows between systems | `covered` | the Drive→Sanity→showroom pipeline proven by the bounded multi-hop `inventory-image-pipeline-path`; every edge is `draft`, i.e. proposed MVP architecture (planning-only), not shipped — the guard requires every path edge to stay `draft` |
 | Workflows, actions, state transitions, approval boundaries | `covered` | `inventory-images` carries a `state_machine`; the human-approval boundary and workflow resources are proven by `inventory-workflow-resources` and the draft pipeline's approval-gate guard |
 | Metric definitions, sources, cadence, planning-vs-observed status | `deferred / trigger-gated` | JMD is a pre-launch showroom with no outcome metrics yet; metric modeling is trigger-gated on launch. The schema *can* represent metrics (see maturity dimensions) — the client simply has none |
 | Maintenance ownership, handoff responsibilities, lifecycle posture | `known gap` | many inventory resources are `proposed`/`draft` (lifecycle posture is legible), but no handoff module exists; handoff responsibilities are not yet modeled |
@@ -96,7 +106,7 @@ usable client coverage."
 | Dimension | Enforced by |
 | --- | --- |
 | model representation | `scripts/validate_ontology.py` (schema layer) + `tests/run_fixtures.py` / `tests/run_predicates.py` |
-| client coverage | `tests/run_competency.py` — each client answers its business/technical/multi-hop competency questions against the canonical export, with drift-, loading-, resolver-read-, and relationship/path scope-isolation regressions |
+| client coverage | `tests/run_competency.py` — each client answers its business/technical/multi-hop competency questions against the canonical export, with drift-, loading-, resolver-read-, relationship/path scope-isolation, and path-shape (parallel-edge/cycle/branching/order) regressions, plus a registry shape-validation pass that rejects a malformed query/predicate/expect contract as a usage error before any answer is trusted |
 | runtime queryability | `tests/run_cli.py` — YAML/SQLite service parity for served ops; relationship/path ops are proven correct by the runner and explicitly deferred at the service layer |
 
 ## Competency query vocabulary (issue #41)

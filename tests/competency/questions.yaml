@@ -216,20 +216,58 @@ questions:
       # Cross-client isolation on both endpoints.
       - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
 
-  # Femme — TECHNICAL system/data-flow question. Which outcome metrics measure the
-  # Google Business Profile system, and are those measurement flows still
-  # planning-only (draft) rather than verified current architecture?
-  - id: femme-events.competency.outcome-metrics-measure-gbp-system
+  # Femme — TECHNICAL system/data-flow question (VERIFIED, source-backed). How does
+  # the website system's content/data flow: Sanity CMS content renders into the
+  # site, and the site targets the inquiry form. Both edges are verified and carry
+  # evidence in the website module, so this is a source-backed current data-flow
+  # answer (not a planned one).
+  - id: femme-events.competency.website-content-data-flow
+    client_id: femme-events
+    projection: femme-events.website-build
+    question: >
+      What are the verified content/data flows for the Femme website system —
+      where does CMS content render, and what does the site route inquiries to?
+    rationale: >
+      Protects the website-builder/reporting-consumer job: the real integration
+      surface (Sanity CMS → site, site → inquiry form) must be followed as recorded
+      architecture. Both edges are verified and source-backed in the website module,
+      so a consumer can rely on them as current data-flows rather than guesses.
+    required: true
+    query:
+      op: relationships
+      filters:
+        predicate: [renders_in, targets]
+        source_confidence: verified
+      select: [subject, predicate, object, source_confidence]
+    expect:
+      rows:
+        - {subject: femme-events.website.cms-content, predicate: renders_in, object: femme-events.website.site, source_confidence: verified}
+        - {subject: femme-events.website.site, predicate: targets, object: femme-events.website.inquiry-form, source_confidence: verified}
+    guards:
+      # This IS verified current architecture — every returned edge must be verified.
+      - {type: require_field_in, field: source_confidence, values: [verified]}
+      # Cross-client isolation on both endpoints.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # Femme — planning-only status-awareness demonstration (OPTIONAL, not source-
+  # backed). The three metric→GBP `measures` edges are DRAFT with no evidence: they
+  # define WHAT will be measured, not a shipped instrumentation flow. This question
+  # is deliberately optional and exists only to prove those planned edges stay draft
+  # (a draft data-flow can never masquerade as verified live instrumentation); it is
+  # NOT Femme's source-backed technical answer (see website-content-data-flow above)
+  # and does not claim evidence the draft edges do not carry.
+  - id: femme-events.competency.outcome-metrics-measure-gbp-planning-only
     client_id: femme-events
     projection: femme-events.local-seo
     question: >
-      Which outcome metrics measure the Google Business Profile system, and do
-      those measurement data-flows remain planning-only?
+      Are the planned metric→Google-Business-Profile measurement edges still
+      draft (planning-only), so no planned data-flow poses as verified instrumentation?
     rationale: >
-      Protects the reporting-consumer job: the metric→system measurement edges
-      define WHAT will be measured, not achieved numbers. They must stay draft so a
-      consumer cannot present a planned data-flow as verified live instrumentation.
-    required: true
+      Protects the reporting-consumer job at the planning boundary: these
+      measurement edges are proposed outcome instrumentation, not shipped data-flows.
+      They must stay draft until a real read-only snapshot promotes them, so this
+      optional status-awareness check proves they remain planning-only.
+    required: false
     query:
       op: relationships
       filters:
@@ -302,6 +340,41 @@ questions:
       - {type: require_field_in, field: source_confidence, values: [verified]}
       # Isolation: no inventory endpoint and no other client may appear.
       - {type: forbid_id_prefix, prefixes: [femme-events, jmd-menswear.inventory]}
+
+  # JMD — PEOPLE/ROLES question. Which durable owner responsibilities are recorded,
+  # and is that role split verified? Proves the people/roles coverage family with a
+  # source-backed competency answer (owner-roles is verified + evidenced).
+  - id: jmd-menswear.competency.owner-role-responsibility-split
+    client_id: jmd-menswear
+    projection: jmd-menswear.website-build
+    question: >
+      Which durable owner responsibilities are recorded for JMD (who leads
+      relationships/brand vs. inventory/purchasing/sales), and is that verified?
+    rationale: >
+      Protects the operations/handoff consumer job: an agent or reviewer must route
+      a decision to the right owner. The recorded, verified owner-roles resource
+      names the Lucky/Danny responsibility split so responsibility boundaries are an
+      evidence-backed answer, not tribal knowledge.
+    required: true
+    query:
+      op: entities
+      filters:
+        entity_id: jmd-menswear.operations.owner-roles
+      select: [entity_id, status, source_confidence, fields.Lucky, fields.Danny]
+    expect:
+      rows:
+        - entity_id: jmd-menswear.operations.owner-roles
+          status: active
+          source_confidence: verified
+          Lucky: "relationships and brand personality"
+          Danny: "inventory, purchasing, day-to-day sales"
+    guards:
+      # Only the recorded (active) role fact answers this — a draft proposal cannot.
+      - {type: require_status, statuses: [active]}
+      # This role split must be verified, not inferred/draft.
+      - {type: require_field_in, field: source_confidence, values: [verified]}
+      # Isolation: no other client's resource may appear.
+      - {type: forbid_id_prefix, prefixes: [femme-events]}
 
   # JMD — TECHNICAL system/data-flow AND the required bounded MULTI-HOP question.
   # The Drive→Sanity→showroom image pipeline is a three-hop data flow that is

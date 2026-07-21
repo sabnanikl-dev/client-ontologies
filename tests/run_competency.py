@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sqlite3
 import sys
@@ -169,6 +170,84 @@ def _is_scalar(value: Any) -> bool:
     return isinstance(value, (str, int, float, bool)) and not isinstance(value, dict)
 
 
+# --------------------------------------------------------------------------- #
+# Controlled vocabularies (loaded from the canonical schemas, cached)
+# --------------------------------------------------------------------------- #
+# A relationship ``predicate``, an entity ``entity_type``, a ``source_confidence``
+# or a ``status`` a question names is validated against the SAME controlled set the
+# schema layer enforces (``schemas/module.schema.json`` / ``schemas/defs.schema.json``).
+# Before this, path ``predicates`` and relationship ``predicate`` filters were
+# accepted as bare non-empty strings, so a misspelled predicate (``contians``,
+# ``ues``) produced a silently-empty answer that a required question with
+# ``expect: []`` and vacuous guards reported as PASS (Codex Reviewer A / B and the
+# Integration Auditor each reproduced this). Reading the vocabulary straight from
+# the schema keeps the runner in lockstep: adding a predicate is still a single
+# schema PR, and the runner picks it up with no second source of truth.
+SCHEMAS_DIR = REPO_ROOT / "schemas"
+_VOCAB_CACHE: dict[str, frozenset] = {}
+
+# The bounded ``x_`` experimental escape hatch the schema allows on
+# ``relationship.predicate`` (module.schema.json anyOf); mirror it so a deliberate
+# local predicate extension is accepted while a typo is rejected. Anchored with
+# ``\Z`` (portable here — this is Python ``re``, not the schema's ECMAScript
+# ``pattern``) so an embedded newline cannot smuggle a token past the check.
+_X_PREDICATE = re.compile(r"^x_[a-z][a-z0-9_]*\Z")
+
+
+def _controlled_vocab(name: str) -> frozenset:
+    """Return a controlled vocabulary from the canonical schemas (cached)."""
+    if name not in _VOCAB_CACHE:
+        if name == "predicate":
+            doc = json.loads((SCHEMAS_DIR / "module.schema.json").read_text(encoding="utf-8"))
+            vals = doc["$defs"]["predicateName"]["enum"]
+        elif name == "entity_type":
+            doc = json.loads((SCHEMAS_DIR / "module.schema.json").read_text(encoding="utf-8"))
+            vals = doc["$defs"]["entity"]["properties"]["entity_type"]["enum"]
+        elif name in ("confidence", "status"):
+            doc = json.loads((SCHEMAS_DIR / "defs.schema.json").read_text(encoding="utf-8"))
+            vals = doc["$defs"][name]["enum"]
+        else:  # pragma: no cover - guarded by the closed _COLUMN_VOCAB map
+            raise KeyError(name)
+        _VOCAB_CACHE[name] = frozenset(vals)
+    return _VOCAB_CACHE[name]
+
+
+# Which controlled vocabulary each selectable/filterable column draws from, and
+# whether the bounded ``x_`` escape applies (only ``predicate`` is x_-extensible in
+# the schema). Keyed by the column / output-key name so it works uniformly for a
+# filter operand, a guard operand, and an expected-row value.
+_COLUMN_VOCAB = {
+    "predicate": ("predicate", True),
+    "entity_type": ("entity_type", False),
+    "source_confidence": ("confidence", False),
+    "status": ("status", False),
+}
+
+
+def _check_vocab_token(source: str, qid: Any, label: str, token: Any, vocab_name: str, allow_x: bool) -> None:
+    """Reject a controlled-vocabulary operand that is not a real schema term."""
+    if not isinstance(token, str):
+        _q_err(source, qid, f"{label} must be a string, got {type(token).__name__}")
+    if token in _controlled_vocab(vocab_name):
+        return
+    if allow_x and _X_PREDICATE.match(token):
+        return
+    hint = " (or an 'x_' experimental extension)" if allow_x else ""
+    _q_err(source, qid,
+           f"{label} {token!r} is not in the controlled {vocab_name} vocabulary "
+           f"{sorted(_controlled_vocab(vocab_name))}{hint}")
+
+
+def _check_vocab_values(source: str, qid: Any, label: str, values: Any, column: str) -> None:
+    """Validate one-or-many operand value(s) for a controlled column (no-op otherwise)."""
+    spec = _COLUMN_VOCAB.get(column)
+    if spec is None:
+        return
+    vocab_name, allow_x = spec
+    for v in (values if isinstance(values, list) else [values]):
+        _check_vocab_token(source, qid, label, v, vocab_name, allow_x)
+
+
 # Per-op output column(s) a ``forbid_id_prefix`` row guard needs in the select so
 # there are ids to inspect. A relationship's leak vector is its ENDPOINTS, so an
 # isolation guard on a relationships answer requires both ``subject`` and
@@ -218,7 +297,30 @@ def _validate_guard(source: str, qid: Any, guard: Any, op: str, output_keys: Opt
         _q_err(source, qid, f"guard {gtype!r} has unknown operand(s) {unknown}; required {sorted(required)}")
     for key, kind in required.items():
         _check_operand(source, qid, guard, key, kind)
+    _check_guard_vocab(source, qid, guard, gtype)
     _check_guard_applicability(source, qid, guard, gtype, op, output_keys)
+
+
+def _check_guard_vocab(source: str, qid: Any, guard: dict[str, Any], gtype: str) -> None:
+    """Validate a guard's controlled-vocabulary operands (status / confidence).
+
+    A guard that asserts against a controlled column must name real schema terms:
+    ``require_status``/``forbid_status`` against the status vocabulary, the
+    edge-confidence guards against the confidence vocabulary, and
+    ``require_field_in``/``forbid_field_in``/``require_field_equals`` against their
+    field's vocabulary when that field is a controlled column. A typo'd operand
+    (e.g. ``statuses: [activ]``) would otherwise make the guard silently vacuous.
+    """
+    if gtype in ("require_status", "forbid_status"):
+        for s in guard.get("statuses") or []:
+            _check_vocab_token(source, qid, f"guard {gtype!r} status", s, "status", False)
+    elif gtype in EDGE_CONFIDENCE_GUARDS:
+        for v in guard.get("values") or []:
+            _check_vocab_token(source, qid, f"guard {gtype!r} confidence", v, "confidence", False)
+    elif gtype in ("require_field_in", "forbid_field_in"):
+        _check_vocab_values(source, qid, f"guard {gtype!r} value", guard.get("values"), guard.get("field"))
+    elif gtype == "require_field_equals":
+        _check_vocab_values(source, qid, f"guard {gtype!r} value", guard.get("value"), guard.get("field"))
 
 
 def _check_guard_applicability(
@@ -283,6 +385,10 @@ def _validate_node_constraint(source: str, qid: Any, name: str, node: Any) -> No
     for key in bound:
         if not isinstance(node[key], str) or not node[key]:
             _q_err(source, qid, f"path {name!r} constraint {key!r} must be a non-empty string")
+    # An ``entity_type`` node constraint must name a real schema entity type, so a
+    # typo cannot silently constrain the traversal to nothing.
+    if "entity_type" in node:
+        _check_vocab_token(source, qid, f"path {name!r} entity_type", node["entity_type"], "entity_type", False)
 
 
 def _validate_path_query(source: str, qid: Any, query: dict[str, Any]) -> None:
@@ -308,6 +414,13 @@ def _validate_path_query(source: str, qid: Any, query: dict[str, Any]) -> None:
         _q_err(source, qid, "path 'predicates' must be a non-empty list of non-empty strings")
     if len(set(preds)) != len(preds):
         _q_err(source, qid, f"path 'predicates' has duplicate entries: {preds}")
+    # Every allowed predicate must be a real schema predicate (or an x_ extension).
+    # This is the direct fix for the reproduced false-pass: a path over a misspelled
+    # predicate (``creates_or_updtaes``, ``contians``) with ``expect.paths: []`` and
+    # a universal edge-confidence guard used to validate, evaluate to ``[]``, and
+    # report PASS because the guard is vacuous over an empty answer.
+    for p in preds:
+        _check_vocab_token(source, qid, "path predicate", p, "predicate", True)
     lo, hi = query["min_hops"], query["max_hops"]
     # bool is an int subclass; reject it so ``min_hops: true`` cannot pose as 1.
     for name, val in (("min_hops", lo), ("max_hops", hi)):
@@ -365,6 +478,10 @@ def _validate_query(source: str, qid: Any, query: Any) -> tuple[str, Optional[se
                     _q_err(source, qid, f"filter {col!r} list operand must be a non-empty list of scalars")
             elif not _is_scalar(want):
                 _q_err(source, qid, f"filter {col!r} operand must be a scalar or list of scalars, got {type(want).__name__}")
+            # A controlled column (predicate / entity_type / source_confidence /
+            # status) must filter on a real schema term — a typo'd predicate would
+            # otherwise silently match nothing and pass a required question.
+            _check_vocab_values(source, qid, f"filter {col!r} value", want, col)
 
     select = query.get("select")
     if not isinstance(select, list) or not select or not all(isinstance(t, str) for t in select):
@@ -383,10 +500,30 @@ def _validate_query(source: str, qid: Any, query: Any) -> tuple[str, Optional[se
     return op, set(output_keys)
 
 
-def _validate_expect(source: str, qid: Any, op: str, output_keys: Optional[set], expect: Any) -> None:
-    """Validate the expect payload against the op and the query's output keys."""
+def _expect_envelope_key(op: str) -> str:
+    """The single legal top-level ``expect`` key for an op."""
+    return {"projection_resources": "resources", "path": "paths"}.get(op, "rows")
+
+
+def _validate_expect(source: str, qid: Any, op: str, output_keys: Optional[set], query: dict[str, Any], expect: Any) -> None:
+    """Validate the expect payload against the op, the query, and its output keys.
+
+    The ``expect`` envelope is CLOSED: only the op's one legal key (plus an ``x_``
+    extension) is allowed, so a stray ``expect.pathz`` cannot leave the real
+    ``paths`` empty while the misspelled twin is silently ignored (Codex Reviewer A
+    / Integration Auditor). For a ``path`` op each expected chain is additionally
+    validated AGAINST the query — its hop count within ``[min_hops, max_hops]``, its
+    predicates drawn from the query's allowed set, and its endpoints consistent with
+    the ``start``/``end`` id / id_prefix constraints — so an expected path that
+    contradicts the query it claims to answer is a usage error, not a trusted
+    false-positive.
+    """
     if not isinstance(expect, dict):
         _q_err(source, qid, "'expect' must be a mapping")
+    legal = _expect_envelope_key(op)
+    stray = sorted(k for k in expect if k != legal and not str(k).startswith("x_"))
+    if stray:
+        _q_err(source, qid, f"expect has unknown key(s) {stray}; the only allowed expect key for a {op!r} query is {legal!r}")
     if op == "projection_resources":
         resources = expect.get("resources")
         if not isinstance(resources, dict):
@@ -409,6 +546,7 @@ def _validate_expect(source: str, qid: Any, op: str, output_keys: Optional[set],
                 _q_err(source, qid, "expect.paths[].chain must be an odd-length (node,predicate,...,node) list of strings, length >= 3")
             if not isinstance(conf, list) or not all(isinstance(x, str) for x in conf) or len(conf) != (len(chain) - 1) // 2:
                 _q_err(source, qid, "expect.paths[].confidences must be a list of strings, one per edge in 'chain'")
+            _validate_expected_chain(source, qid, query, chain, conf)
         return
     rows = expect.get("rows")
     if not isinstance(rows, list):
@@ -419,6 +557,44 @@ def _validate_expect(source: str, qid: Any, op: str, output_keys: Optional[set],
         keys = set(row.keys())
         if keys != output_keys:
             _q_err(source, qid, f"expect row keys {sorted(keys)} do not match select output keys {sorted(output_keys or [])}")
+        # An expected value on a controlled column (predicate / source_confidence /
+        # entity_type / status) must itself be a real schema term, so an expected
+        # row cannot assert a typo'd predicate the query could never return.
+        for col, val in row.items():
+            _check_vocab_values(source, qid, f"expect row {col!r} value", val, col)
+
+
+def _endpoint_matches(constraint: dict[str, Any], node: str) -> Optional[str]:
+    """Return a mismatch reason if ``node`` violates the id/id_prefix constraint.
+
+    ``entity_type`` is intentionally NOT checked here — that needs the export to
+    know a node's type — so this validates only the constraints resolvable from the
+    registry alone. The runtime comparison still catches a wrong-typed endpoint.
+    """
+    if "id" in constraint and node != constraint["id"]:
+        return f"expected endpoint {node!r} != required id {constraint['id']!r}"
+    if "id_prefix" in constraint and not node.startswith(constraint["id_prefix"]):
+        return f"expected endpoint {node!r} does not start with required id_prefix {constraint['id_prefix']!r}"
+    return None
+
+
+def _validate_expected_chain(source: str, qid: Any, query: dict[str, Any], chain: list, conf: list) -> None:
+    """Relate one expected path chain to the query's own bounds/predicates/endpoints."""
+    nodes, preds = chain[0::2], chain[1::2]
+    hops = len(preds)
+    lo, hi = query["min_hops"], query["max_hops"]
+    if not (lo <= hops <= hi):
+        _q_err(source, qid, f"expect.paths[].chain has {hops} hop(s), outside the query bounds [{lo}, {hi}]")
+    allowed = set(query["predicates"])
+    bad = [p for p in preds if p not in allowed]
+    if bad:
+        _q_err(source, qid, f"expect.paths[].chain uses predicate(s) {sorted(set(bad))} not in the query's allowed predicates {sorted(allowed)}")
+    for name, node in (("start", nodes[0]), ("end", nodes[-1])):
+        reason = _endpoint_matches(query[name], node)
+        if reason:
+            _q_err(source, qid, f"expect.paths[] {name} {reason}")
+    for c in conf:
+        _check_vocab_token(source, qid, "expect.paths[].confidences value", c, "confidence", False)
 
 
 def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
@@ -491,7 +667,7 @@ def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
         if not isinstance(req, bool):
             _q_err(source, qid, f"'required' must be a boolean (true/false), got {type(req).__name__}")
         op, output_keys = _validate_query(source, qid, q["query"])
-        _validate_expect(source, qid, op, output_keys, q.get("expect") or {})
+        _validate_expect(source, qid, op, output_keys, q["query"], q.get("expect") or {})
         guards = q.get("guards")
         if guards is not None and not isinstance(guards, list):
             _q_err(source, qid, "'guards' must be a list")
@@ -760,8 +936,26 @@ def _run_path(conn: sqlite3.Connection, client_id: str, includes: dict[str, Any]
 
 
 def _normalize_paths(paths: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sort path dicts deterministically (by their JSON serialization)."""
-    return sorted(paths, key=lambda p: json.dumps(p, sort_keys=True, ensure_ascii=False))
+    """Sort path dicts deterministically AND deduplicate identical ones.
+
+    The public path representation is (nodes, predicates, confidences) and
+    deliberately omits relationship IDs (Codex Reviewer A). Two PARALLEL edges with
+    identical endpoints, predicate, and confidence therefore produce the same public
+    path object; without dedup they surfaced as two indistinguishable paths and
+    ``_compare_paths`` could only say "expected 1, got 2" with empty missing/
+    unexpected diagnostics. Collapsing identical path objects makes the answer a
+    set of distinct paths, which is the honest semantics for an edge-identity-free
+    representation. Ordering stays deterministic (JSON key sort).
+    """
+    seen: set[str] = set()
+    ordered: list[dict[str, Any]] = []
+    for p in sorted(paths, key=lambda p: json.dumps(p, sort_keys=True, ensure_ascii=False)):
+        key = json.dumps(p, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(p)
+    return ordered
 
 
 def _normalize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1570,6 +1764,115 @@ def run_query_scope_probes(tmpdir: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Path-shape regression (issue #41; parallel edges, cycles, branching, order)
+# --------------------------------------------------------------------------- #
+_PATH_SHAPE_FIXTURE = {
+    "clients/acme/ontology.yaml": (
+        'schema_version: "0.1"\nkind: ontology\nid: acme.ontology\nclient_id: acme\n'
+        "status: active\nmodules:\n"
+        "  - {path: modules/graph.yaml, id: acme.graph}\n"
+        "projections:\n"
+        "  - {path: projections/p.yaml, id: acme.p}\n"
+    ),
+    "clients/acme/client.yaml": (
+        'schema_version: "0.1"\nkind: client\nid: acme\nname: Acme\nstatus: active\n'
+    ),
+    # graph: a contains b via TWO parallel edges (same endpoints/predicate/
+    # confidence), a also contains c (branching), b contains a (a back-edge that
+    # must never re-enter a on a simple path), and c contains d (depth).
+    "clients/acme/modules/graph.yaml": (
+        'schema_version: "0.1"\nkind: ontology_module\nid: acme.graph\nclient_id: acme\n'
+        "title: Graph\nstatus: active\n"
+        "entities:\n"
+        "  - {id: acme.g.a, label: a, entity_type: system_resource}\n"
+        "  - {id: acme.g.b, label: b, entity_type: content_record}\n"
+        "  - {id: acme.g.c, label: c, entity_type: content_record}\n"
+        "  - {id: acme.g.d, label: d, entity_type: content_record}\n"
+        "relationships:\n"
+        "  - {id: acme.g.a-contains-b-1, subject: acme.g.a, predicate: contains, object: acme.g.b, source_confidence: draft}\n"
+        "  - {id: acme.g.a-contains-b-2, subject: acme.g.a, predicate: contains, object: acme.g.b, source_confidence: draft}\n"
+        "  - {id: acme.g.a-contains-c, subject: acme.g.a, predicate: contains, object: acme.g.c, source_confidence: draft}\n"
+        "  - {id: acme.g.b-contains-a, subject: acme.g.b, predicate: contains, object: acme.g.a, source_confidence: draft}\n"
+        "  - {id: acme.g.c-contains-d, subject: acme.g.c, predicate: contains, object: acme.g.d, source_confidence: draft}\n"
+    ),
+    "clients/acme/projections/p.yaml": (
+        'schema_version: "0.1"\nkind: projection\nid: acme.p\nclient_id: acme\n'
+        "status: active\nincludes:\n  modules: [acme.graph]\n"
+    ),
+}
+
+
+def run_path_shape_probes(tmpdir: Path) -> dict[str, Any]:
+    """Prove parallel edges, cycles, branching, and ordering behave deterministically.
+
+    Directly answers Codex Reviewer A's parallel-edge finding: because the public
+    path representation omits relationship IDs, two parallel edges must collapse to
+    ONE path, not two indistinguishable duplicates. Also proves a back-edge cannot
+    make a simple-path traversal revisit a node (cycle safety / termination),
+    branching yields distinct paths, and repeated runs return byte-identical order.
+    """
+    root = tmpdir / "path-shape-fixture"
+    for rel, text in _PATH_SHAPE_FIXTURE.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    db = tmpdir / "path-shape-fixture.sqlite"
+    e.export(root, db)
+
+    conn = sqlite3.connect(db)
+    cases: list[dict[str, Any]] = []
+
+    def record(name: str, ok: bool, detail: Any) -> None:
+        cases.append({"name": name, "ok": ok, "detail": detail})
+
+    def pathq(**q: Any) -> dict[str, Any]:
+        return _scope_question("path", **q)
+
+    try:
+        # 1. Parallel edges (a→b twice) collapse to exactly one path.
+        parallel = run_query(conn, pathq(
+            start={"id": "acme.g.a"}, end={"id": "acme.g.b"},
+            predicates=["contains"], min_hops=1, max_hops=1,
+        ))
+        record("parallel-edge-dedup", parallel == [
+            {"chain": ["acme.g.a", "contains", "acme.g.b"], "confidences": ["draft"]}
+        ], parallel)
+
+        # 2. Branching from a yields two DISTINCT one-hop paths (to b and to c),
+        #    the deduped a→b among them (not three).
+        branch = run_query(conn, pathq(
+            start={"id": "acme.g.a"}, end={"entity_type": "content_record"},
+            predicates=["contains"], min_hops=1, max_hops=1,
+        ))
+        ends = sorted(p["chain"][-1] for p in branch)
+        record("branching-distinct-paths", len(branch) == 2 and ends == ["acme.g.b", "acme.g.c"], branch)
+
+        # 3. Cycle safety: the b→a back-edge must never re-enter a; every returned
+        #    chain is a simple path (no repeated node) and traversal terminates.
+        deep = run_query(conn, pathq(
+            start={"id": "acme.g.a"}, end={"entity_type": "content_record"},
+            predicates=["contains"], min_hops=1, max_hops=3,
+        ))
+        no_repeat = all(len(n) == len(set(n)) for p in deep for n in [p["chain"][0::2]])
+        has_depth = any(
+            p["chain"] == ["acme.g.a", "contains", "acme.g.c", "contains", "acme.g.d"] for p in deep
+        )
+        record("cycle-simple-path-bounded", no_repeat and has_depth, deep)
+
+        # 4. Stable ordering: two identical runs return byte-identical results.
+        again = run_query(conn, pathq(
+            start={"id": "acme.g.a"}, end={"entity_type": "content_record"},
+            predicates=["contains"], min_hops=1, max_hops=3,
+        ))
+        record("stable-ordering", again == deep, again)
+    finally:
+        conn.close()
+
+    passed = all(c["ok"] for c in cases)
+    return {"passed": passed, "cases": cases}
+
+
+# --------------------------------------------------------------------------- #
 # Registry shape-validation regression (the malformed-registry negative case)
 # --------------------------------------------------------------------------- #
 def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
@@ -1658,8 +1961,9 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
         # Reviewer A: an expected-row typo matching a real column must be caught
         # even when the select tokens are valid.
         ("expect-row-key-typo", doc(q(expect={"rows": [{"entity_id": "c.x", "statsu": "draft"}]})), "do not match select output keys"),
-        # projection_resources must define expect.resources (not rows).
-        ("projection-resources-missing", doc(q(query={"op": "projection_resources"}, expect={"rows": []})), "expect.resources"),
+        # projection_resources must define expect.resources (a missing/empty expect
+        # has no resources mapping to compare against).
+        ("projection-resources-missing", doc(q(query={"op": "projection_resources"}, expect={})), "expect.resources"),
         # Reviewer A / Auditor: a status guard when 'status' is not selected is a
         # silent no-op at evaluation → reject before evaluation.
         ("forbid-status-not-selected",
@@ -1815,6 +2119,102 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
                       "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
                expect={"paths": [{"chain": ["c.a", "contains"], "confidences": ["draft"]}]})),
          "odd-length"),
+        # ---- issue #41 fix cycle 1: controlled-vocabulary fail-closed -----------
+        # Integration Auditor / Codex Reviewer A+B EXACT repro: a path over a
+        # MISSPELLED predicate with expect.paths:[] and a universal edge-confidence
+        # guard used to validate, evaluate to [], and report PASS (the guard was
+        # vacuous over the empty answer). It must now be rejected at validation.
+        ("path-predicate-typo-with-vacuous-guard",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"entity_type": "content_record"},
+                      "predicates": ["creates_or_updtaes"], "min_hops": 1, "max_hops": 3},
+               expect={"paths": []},
+               guards=[{"type": "require_edge_confidence_in", "values": ["draft"]},
+                       {"type": "forbid_id_prefix", "prefixes": ["other"]}])),
+         "controlled predicate vocabulary"),
+        # Codex Reviewer B EXACT repro: a relationship filter on a misspelled
+        # predicate (`ues`) with expect.rows:[] must fail closed, not match nothing.
+        ("relationships-predicate-filter-typo",
+         doc(q(query={"op": "relationships", "filters": {"predicate": "ues"},
+                      "select": ["subject", "predicate", "object", "source_confidence"]},
+               expect={"rows": []})),
+         "controlled predicate vocabulary"),
+        # The bounded `x_` experimental predicate escape hatch (schema anyOf) is
+        # still accepted, so a deliberate local extension is not a typo.
+        ("relationships-predicate-x-extension-ok",
+         doc(q(query={"op": "relationships", "filters": {"predicate": "x_experimental"},
+                      "select": ["subject", "predicate", "object"]},
+               expect={"rows": []})),
+         None),
+        # A misspelled entity_type filter must be rejected against the schema vocab.
+        ("entities-entity-type-filter-typo",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "metrik"}, "select": ["entity_id", "status"]},
+               expect={"rows": [{"entity_id": "c.x", "status": "draft"}]})),
+         "controlled entity_type vocabulary"),
+        # A misspelled source_confidence filter must be rejected against the vocab.
+        ("relationships-confidence-filter-typo",
+         doc(q(query={"op": "relationships", "filters": {"source_confidence": "verifed"},
+                      "select": ["subject", "object", "source_confidence"]},
+               expect={"rows": []})),
+         "controlled confidence vocabulary"),
+        # A misspelled entity_type in a path node constraint must be rejected.
+        ("path-start-entity-type-typo",
+         doc(q(query={"op": "path", "start": {"entity_type": "systm_resource"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": []})),
+         "controlled entity_type vocabulary"),
+        # A misspelled edge-confidence guard operand must be rejected (else vacuous).
+        ("edge-confidence-guard-value-typo",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": []},
+               guards=[{"type": "require_edge_confidence_in", "values": ["draaft"]}])),
+         "controlled confidence vocabulary"),
+        # A misspelled require_status operand must be rejected against the vocab.
+        ("require-status-value-typo",
+         doc(q(query={"op": "entities", "select": ["entity_id", "status"]},
+               expect={"rows": [{"entity_id": "c.x", "status": "draft"}]},
+               guards=[{"type": "require_status", "statuses": ["activ"]}])),
+         "controlled status vocabulary"),
+        # Codex Reviewer A EXACT repro: a stray `expect.pathz` twin key must be
+        # rejected — the CLOSED expect envelope prevents the real `paths` from
+        # silently staying empty while the misspelled twin is ignored.
+        ("expect-envelope-stray-key-path",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": [], "pathz": [{"chain": ["c.a", "contains", "c.b"], "confidences": ["draft"]}]})),
+         "unknown key(s)"),
+        ("expect-envelope-stray-key-rows",
+         doc(q(expect={"rows": [{"entity_id": "c.x", "status": "draft"}], "rowz": []})),
+         "unknown key(s)"),
+        # Codex Reviewer A EXACT repro class: an expected path CONTRADICTING the
+        # query it claims to answer must be rejected — a disallowed predicate, an
+        # out-of-bounds hop count, a mismatched endpoint, or a bad confidence token.
+        ("expect-chain-predicate-not-allowed",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.c"},
+                      "predicates": ["contains"], "min_hops": 2, "max_hops": 2},
+               expect={"paths": [{"chain": ["c.a", "renders_in", "c.b", "contains", "c.c"], "confidences": ["draft", "draft"]}]})),
+         "not in the query's allowed predicates"),
+        ("expect-chain-hops-out-of-bounds",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 2, "max_hops": 2},
+               expect={"paths": [{"chain": ["c.a", "contains", "c.b"], "confidences": ["draft"]}]})),
+         "outside the query bounds"),
+        ("expect-chain-start-endpoint-mismatch",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 1},
+               expect={"paths": [{"chain": ["c.z", "contains", "c.b"], "confidences": ["draft"]}]})),
+         "start expected endpoint"),
+        ("expect-chain-confidence-typo",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 1},
+               expect={"paths": [{"chain": ["c.a", "contains", "c.b"], "confidences": ["draaft"]}]})),
+         "controlled confidence vocabulary"),
+        # An expected relationship row asserting a typo'd predicate must be rejected.
+        ("expect-row-predicate-typo",
+         doc(q(query={"op": "relationships", "filters": {"predicate": "uses"},
+                      "select": ["subject", "predicate", "object", "source_confidence"]},
+               expect={"rows": [{"subject": "c.a", "predicate": "uzes", "object": "c.b", "source_confidence": "verified"}]})),
+         "controlled predicate vocabulary"),
     ]
 
 
@@ -1858,6 +2258,7 @@ def _print_human(
     loading: dict[str, Any],
     resolver: dict[str, Any],
     scope: dict[str, Any],
+    path_shape: dict[str, Any],
 ) -> None:
     print("Competency questions\n" + "=" * 20)
     for r in results:
@@ -1898,6 +2299,10 @@ def _print_human(
               f"excluded modules parsed={case['excluded_modules_parsed']}")
     print("\nRelationship/path scope-isolation regression (synthetic; result boundary)\n" + "-" * 71)
     for case in scope["cases"]:
+        mark = "PASS" if case["ok"] else "FAIL"
+        print(f"[{mark}] {case['name']}")
+    print("\nPath-shape regression (synthetic; parallel/cycle/branching/order)\n" + "-" * 64)
+    for case in path_shape["cases"]:
         mark = "PASS" if case["ok"] else "FAIL"
         print(f"[{mark}] {case['name']}")
 
@@ -1942,6 +2347,9 @@ def run(argv: Optional[list] = None) -> int:
         # projection (an excluded-module endpoint and a disallowed predicate never
         # leak), evaluated at the RESULT boundary on a full export.
         scope = run_query_scope_probes(tmpdir)
+        # Path-shape regression (issue #41): parallel-edge dedup, cycle safety,
+        # branching, and deterministic ordering (Codex Reviewer A parallel-edge finding).
+        path_shape = run_path_shape_probes(tmpdir)
         try:
             exports = _build_scope_exports(root, questions, tmpdir)
         except QuestionError as exc:
@@ -1958,6 +2366,7 @@ def run(argv: Optional[list] = None) -> int:
         or not loading["passed"]
         or not resolver["passed"]
         or not scope["passed"]
+        or not path_shape["passed"]
     ) else 0
 
     if args.json:
@@ -1972,16 +2381,17 @@ def run(argv: Optional[list] = None) -> int:
                 "loading_isolation": loading,
                 "resolver_read_isolation": resolver,
                 "query_scope_isolation": scope,
+                "path_shape": path_shape,
                 "exit_code": exit_code,
             },
             ensure_ascii=False,
             indent=2,
         ))
     else:
-        _print_human(results, drift, probes, loading, resolver, scope)
+        _print_human(results, drift, probes, loading, resolver, scope, path_shape)
         if exit_code == 0:
             print(f"\nall {len(results)} competency question(s) passed; drift isolation + registry shape "
-                  "+ loading isolation + resolver-read isolation + query scope-isolation checks hold")
+                  "+ loading isolation + resolver-read isolation + query scope-isolation + path-shape checks hold")
         else:
             if failed_required:
                 print(f"\nFAILED: {len(failed_required)} required competency question(s) failed", file=sys.stderr)
@@ -1999,6 +2409,9 @@ def run(argv: Optional[list] = None) -> int:
             if not scope["passed"]:
                 bad = [c["name"] for c in scope["cases"] if not c["ok"]]
                 print(f"FAILED: relationship/path scope-isolation regression leaked out-of-scope resources: {bad}", file=sys.stderr)
+            if not path_shape["passed"]:
+                bad = [c["name"] for c in path_shape["cases"] if not c["ok"]]
+                print(f"FAILED: path-shape regression (parallel/cycle/branching/order) did not hold: {bad}", file=sys.stderr)
     return exit_code
 
 
