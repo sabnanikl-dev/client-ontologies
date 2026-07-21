@@ -152,16 +152,29 @@ def insert_evidence(conn: sqlite3.Connection, client_id: str, owner_id: str, ite
         )
 
 
-def export(root: Path, output: Path) -> None:
+def export(root: Path, output: Path, paths: list[Path] | None = None) -> None:
+    """Export canonical YAML into ``output``.
+
+    By default this covers the exact same file set the validator gates on
+    (``load_documents(root)``, manifest-first). When ``paths`` is given, only
+    those files are parsed and exported — a client/projection-directed load that
+    reuses the identical shared parser (``parse_yaml``) and table shapes, so a
+    caller (e.g. the competency runner, issue #31) can build a scoped export
+    without scanning every client's YAML. ``paths`` must stay under ``root``.
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         output.unlink()
     conn = sqlite3.connect(output)
     init_db(conn)
 
-    # Enumerate via the shared loader so the export covers the exact same file
-    # set the validator gates on (manifest-first order included).
-    for path, data in load_documents(root).items():
+    # Enumerate via the shared loader (full export) unless the caller pinned an
+    # explicit scoped file set. Either way parsing goes through parse_yaml.
+    if paths is None:
+        documents = load_documents(root)
+    else:
+        documents = {p: parse_yaml(p) for p in paths}
+    for path, data in documents.items():
         kind = data.get("kind")
         if kind == "ontology":
             conn.execute(

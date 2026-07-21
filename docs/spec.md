@@ -270,7 +270,7 @@ client-ontologies/
     run_fixtures.py        # invalid fixtures must fail validation
     run_predicates.py      # predicate enum/constraint/inverse sync
     run_export.py          # valid fixture must validate + export
-    run_competency.py      # outcome regression: projection-scoped competency answers
+    run_competency.py      # outcome regression: projection/client-directed competency answers
     run_checks.py          # guardrail engine matching + exit semantics
     run_evidence.py        # evidence-health hashing + strict exit semantics
     competency/

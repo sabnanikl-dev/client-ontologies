@@ -29,11 +29,14 @@ kind: competency_suite
 # ---------------------------------------------------------------------------
 description: >
   Deterministic competency questions for the live client ontologies. Each
-  question names a client and a target projection. The runner builds one shared
-  canonical export (which parses every client's YAML) and then scopes each
-  query's RESULTS strictly through the named projection, so no unrelated client
-  and no unlisted-and-unreferenced module can appear in an answer — result
-  isolation, not projection-directed file loading.
+  question names a client and a target projection. The runner loads
+  projection/client-directed: for each question it builds a SCOPED export from
+  only the named client's manifest, client.yaml, the named projection, and the
+  module files that projection references — never another client's files and
+  never a module the projection does not pull into scope. On top of that scoped
+  export it also restricts each query's RESULTS through the named projection, so
+  no unrelated client and no unlisted-and-unreferenced module can appear in an
+  answer.
 
 questions:
   # ---- Femme Events -------------------------------------------------------

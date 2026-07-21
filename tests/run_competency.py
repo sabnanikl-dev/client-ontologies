@@ -13,28 +13,41 @@ each question's projection-scoped query against that export and compares the
 normalized answer to the expected answer stored in the registry.
 
 Design contract (issue #31):
-  * Reuses #21's shared loader/export path; adds no second YAML parser.
+  * Reuses #21's shared loader/export path; adds no second YAML parser. Parsing
+    always goes through ``ontology_loader.parse_yaml`` and rows land in the same
+    SQLite table shapes ``scripts/export_sqlite.py`` produces.
   * Builds the SQLite export in a temp dir; never touches the repo's build/.
-  * Scopes each query's RESULTS strictly through the named projection. The shared
-    export parses every client's canonical YAML (it is a full canonical export,
-    not a projection-directed load); isolation is therefore a property of the
-    ANSWER, not of file loading. An ``entities``/``rules`` query surfaces a row
-    only if it belongs to the question's ``client_id`` AND its module is in the
-    projection's ``includes.modules`` or its id is named (or ``.*``-matched) in
-    ``includes.entities``/``includes.rules``. No other client's rows and no
+  * Projection/client-directed LOADING (not just result filtering). Because every
+    question names one client and one projection, the runner builds a SCOPED
+    export per ``(client_id, projection_id)``: it reads only that client's
+    manifest, ``client.yaml``, the named projection, and the module files that
+    projection actually pulls into scope (``includes.modules`` plus any module
+    that owns an entity/rule the projection references). It never parses another
+    client's files, and never parses the client's other projections or modules
+    the projection does not reference. ``resolve_scope_paths`` computes this file
+    set and ``run_loading_isolation_probes`` asserts nothing outside it leaks in.
+  * Scopes each query's RESULTS strictly through the named projection on top of
+    the scoped export. An ``entities``/``rules`` query surfaces a row only if it
+    belongs to the question's ``client_id`` AND its module is in the projection's
+    ``includes.modules`` or its id is named (or ``.*``-matched) in
+    ``includes.entities``/``includes.rules`` (mirrors the validator /
+    ``check_rules`` semantics). No other client's rows and no
     unlisted-and-unreferenced module's rows can appear in an answer.
   * Deterministic: no network, model, API credential, or live-client call; rows
     and lists are sorted before comparison and output.
   * Emits a human-readable report by default and machine JSON with ``--json``;
     on a failed question it names the question and shows expected vs actual.
-  * Exits non-zero when any REQUIRED question fails or the drift-isolation
-    regression fails.
+  * Exits non-zero when any REQUIRED question fails, the drift-isolation
+    regression fails, the registry shape-validation probes fail, or the
+    loading-isolation probes detect cross-client / unrelated-module leakage.
 
 Reuse seam for issue #19: import ``load_questions`` and
 ``evaluate_suite(db_path, questions)`` (or the lower-level ``evaluate_question``
 / ``run_query``) to prove YAML/SQLite answer equivalence against the SAME corpus
 without copying any expected value into service code. Point ``evaluate_suite`` at
-a service-produced export and compare its ``status`` fields.
+a service-produced export and compare its ``status`` fields. (``evaluate_suite``
+evaluates every question against one given export; the runner itself instead
+builds a scoped export per question for projection-directed loading.)
 
 Run from the repo root:  python3 tests/run_competency.py
 """
@@ -97,6 +110,15 @@ def _q_err(source: str, qid: Any, msg: str) -> None:
     raise QuestionError(f"{source}: question {qid!r}: {msg}")
 
 
+def _is_scalar(value: Any) -> bool:
+    """True for a bare filter/expected scalar (str/int/float/bool, not None)."""
+    return isinstance(value, (str, int, float, bool)) and not isinstance(value, dict)
+
+
+# Per-op id output column a ``forbid_id_prefix`` row guard needs in the select.
+_OP_ID_OUTPUT = {"entities": "entity_id", "rules": "rule_id"}
+
+
 def _check_operand(source: str, qid: Any, guard: dict[str, Any], key: str, kind: str) -> None:
     """Enforce a guard operand's presence and shape (empty/typo operands fail)."""
     if key not in guard:
@@ -112,8 +134,17 @@ def _check_operand(source: str, qid: Any, guard: dict[str, Any], key: str, kind:
             _q_err(source, qid, f"guard {guard.get('type')!r} operand {key!r} must be a non-empty string")
 
 
-def _validate_guard(source: str, qid: Any, guard: Any) -> None:
-    """Validate one guard: known type, no stray operands, required operands present + shaped."""
+def _validate_guard(source: str, qid: Any, guard: Any, op: str, output_keys: Optional[set]) -> None:
+    """Validate one guard: known type, no stray operands, required operands present + shaped.
+
+    Crucially, the guard is also bound to the query's OUTPUT SHAPE so a safety
+    assertion can never silently become a no-op (Codex Reviewer A / Integration
+    Auditor): a status guard needs ``status`` selected, ``require_field_equals``
+    needs its named field selected, and ``forbid_id_prefix`` on a row query needs
+    the applicable id column selected. Field-reading guards are meaningless on a
+    ``projection_resources`` answer (it has no per-row columns) and are rejected
+    there; ``forbid_id_prefix`` is the only guard that applies to resources.
+    """
     if not isinstance(guard, dict):
         _q_err(source, qid, "each guard must be a mapping")
     gtype = guard.get("type")
@@ -126,6 +157,32 @@ def _validate_guard(source: str, qid: Any, guard: Any) -> None:
         _q_err(source, qid, f"guard {gtype!r} has unknown operand(s) {unknown}; required {sorted(required)}")
     for key, kind in required.items():
         _check_operand(source, qid, guard, key, kind)
+    _check_guard_applicability(source, qid, guard, gtype, op, output_keys)
+
+
+def _check_guard_applicability(
+    source: str, qid: Any, guard: dict[str, Any], gtype: str, op: str, output_keys: Optional[set]
+) -> None:
+    """Reject a guard that cannot bind to the query's output shape (silent no-op)."""
+    resources = op == "projection_resources"
+    if gtype in ("require_status", "forbid_status"):
+        if resources:
+            _q_err(source, qid, f"guard {gtype!r} reads a row 'status' and does not apply to a projection_resources query")
+        if "status" not in (output_keys or set()):
+            _q_err(source, qid, f"guard {gtype!r} requires 'status' in the query's select {sorted(output_keys or [])}")
+    elif gtype == "require_field_equals":
+        field = guard.get("field")
+        if resources:
+            _q_err(source, qid, f"guard {gtype!r} reads a row field and does not apply to a projection_resources query")
+        if field not in (output_keys or set()):
+            _q_err(source, qid, f"guard {gtype!r} requires its field {field!r} in the query's select {sorted(output_keys or [])}")
+    elif gtype == "forbid_id_prefix":
+        # Applies to resources (ids come from the resource lists). On a row query
+        # it needs the op's id column selected, else there are no ids to check.
+        if not resources:
+            id_col = _OP_ID_OUTPUT[op]
+            if id_col not in (output_keys or set()):
+                _q_err(source, qid, f"guard {gtype!r} requires the id column {id_col!r} in the query's select {sorted(output_keys or [])}")
 
 
 def _validate_query(source: str, qid: Any, query: Any) -> tuple[str, Optional[set]]:
@@ -157,9 +214,17 @@ def _validate_query(source: str, qid: Any, query: Any) -> tuple[str, Optional[se
     if filters is not None:
         if not isinstance(filters, dict):
             _q_err(source, qid, "'filters' must be a mapping")
-        for col in filters:
+        for col, want in filters.items():
             if col not in columns:
                 _q_err(source, qid, f"filter column {col!r} is not a valid {op} column {sorted(columns)}")
+            # A filter operand must be a scalar or a list of scalars — a mapping
+            # (e.g. the reviewer's `status: {typo: draft}`) or a null can never
+            # match a column value and would silently drop the filter, so reject.
+            if isinstance(want, list):
+                if not want or not all(_is_scalar(v) for v in want):
+                    _q_err(source, qid, f"filter {col!r} list operand must be a non-empty list of scalars")
+            elif not _is_scalar(want):
+                _q_err(source, qid, f"filter {col!r} operand must be a scalar or list of scalars, got {type(want).__name__}")
 
     select = query.get("select")
     if not isinstance(select, list) or not select or not all(isinstance(t, str) for t in select):
@@ -235,7 +300,7 @@ def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
         if guards is not None and not isinstance(guards, list):
             _q_err(source, qid, "'guards' must be a list")
         for guard in guards or []:
-            _validate_guard(source, qid, guard)
+            _validate_guard(source, qid, guard, op, output_keys)
     return questions
 
 
@@ -244,9 +309,15 @@ def load_questions(path: Path = DEFAULT_QUESTIONS) -> list[dict[str, Any]]:
 
     Returns the list of question dicts. Raises QuestionError on a structurally
     malformed registry (see ``validate_questions``) so a broken registry fails
-    fast instead of silently passing.
+    fast instead of silently passing. A non-mapping / unparseable registry root
+    (``parse_yaml`` raises ``ValueError``) is normalized to ``QuestionError`` so
+    it surfaces as a structured usage error / exit 2, not an uncaught traceback.
     """
-    return validate_questions(parse_yaml(path), str(path))
+    try:
+        doc = parse_yaml(path)
+    except ValueError as exc:
+        raise QuestionError(f"{path}: {exc}") from exc
+    return validate_questions(doc, str(path))
 
 
 # --------------------------------------------------------------------------- #
@@ -508,11 +579,134 @@ def evaluate_suite(db_path: Path, questions: list[dict[str, Any]]) -> list[dict[
     return sorted(results, key=lambda r: r["id"])
 
 
-def _export_temp(root: Path, tmpdir: Path) -> Path:
-    """Build a throwaway SQLite export of ``root`` (never the repo's build/)."""
-    db_path = tmpdir / "competency.sqlite"
-    e.export(root, db_path)
-    return db_path
+# --------------------------------------------------------------------------- #
+# Projection/client-directed loading (issue #31 acceptance criterion)
+# --------------------------------------------------------------------------- #
+def _safe_join(base: Path, rel: Any) -> Path:
+    """Join a manifest-declared relative path, refusing to escape ``base``."""
+    if not isinstance(rel, str) or not rel:
+        raise QuestionError(f"manifest path must be a non-empty string, got {rel!r}")
+    target = (base / rel).resolve()
+    base_r = base.resolve()
+    if target != base_r and base_r not in target.parents:
+        raise QuestionError(f"manifest path {rel!r} escapes the client directory")
+    return target
+
+
+def _collect_ids(paths: list[Path]) -> set:
+    """Parse module files and return the entity + rule ids they define."""
+    ids: set = set()
+    for p in paths:
+        doc = parse_yaml(p)
+        for ent in doc.get("entities") or []:
+            if isinstance(ent, dict) and ent.get("id"):
+                ids.add(ent["id"])
+        for rule in doc.get("rules") or []:
+            if isinstance(rule, dict) and rule.get("id"):
+                ids.add(rule["id"])
+    return ids
+
+
+def resolve_scope_paths(root: Path, client_id: str, projection_id: str) -> tuple[list[Path], dict[str, Any]]:
+    """Compute the minimal file set to answer one (client, projection) question.
+
+    Projection/client-directed loading (issue #31 AC): reads the named client's
+    manifest to discover module/projection membership, then returns ONLY the
+    manifest, ``client.yaml``, the named projection, and the module files that
+    projection pulls into scope — ``includes.modules`` plus any client module
+    that owns an entity/rule the projection references (a ``.*`` wildcard falls
+    back to the client's full module set, still single-client). It never reads
+    another client's files and never reads the client's other projections or
+    modules the projection does not reference. Raises ``QuestionError`` for an
+    unknown client/projection or a manifest that mislabels either — a structured
+    usage error, not a silent empty answer.
+    """
+    cdir = root / "clients" / client_id
+    manifest_path = cdir / "ontology.yaml"
+    if not manifest_path.is_file():
+        raise QuestionError(f"unknown client {client_id!r}: no manifest at {manifest_path}")
+    manifest = parse_yaml(manifest_path)
+    if manifest.get("kind") != "ontology" or manifest.get("client_id") != client_id:
+        raise QuestionError(f"{manifest_path}: not the ontology manifest for client {client_id!r}")
+
+    module_paths: dict[str, Path] = {}
+    for m in manifest.get("modules") or []:
+        if isinstance(m, dict) and m.get("id"):
+            module_paths[m["id"]] = _safe_join(cdir, m.get("path"))
+    projection_paths: dict[str, Path] = {}
+    for p in manifest.get("projections") or []:
+        if isinstance(p, dict) and p.get("id"):
+            projection_paths[p["id"]] = _safe_join(cdir, p.get("path"))
+    if projection_id not in projection_paths:
+        raise QuestionError(f"projection {projection_id!r} is not declared in {client_id!r}'s manifest")
+
+    proj_path = projection_paths[projection_id]
+    includes = (parse_yaml(proj_path).get("includes") or {})
+    inc_modules = [m for m in (includes.get("modules") or []) if isinstance(m, str)]
+    patterns = [p for p in ((includes.get("entities") or []) + (includes.get("rules") or [])) if isinstance(p, str)]
+
+    needed = {m for m in inc_modules if m in module_paths}
+    if any(p.endswith(".*") for p in patterns):
+        # A wildcard can span modules we cannot resolve statically; load the full
+        # (still single-client) module set to keep the answer complete.
+        needed = set(module_paths)
+    else:
+        defined = _collect_ids([module_paths[m] for m in needed])
+        unresolved = [p for p in patterns if p not in defined]
+        if unresolved:
+            for mid, mpath in module_paths.items():
+                if mid in needed:
+                    continue
+                if any(p in _collect_ids([mpath]) for p in unresolved):
+                    needed.add(mid)
+
+    ordered = [manifest_path, cdir / "client.yaml"]
+    ordered += [module_paths[m] for m in sorted(needed)]
+    ordered.append(proj_path)
+    ordered = [p for p in ordered if p.is_file()]
+
+    excluded_modules = sorted(mid for mid in module_paths if mid not in needed)
+    meta = {
+        "client_id": client_id,
+        "projection": projection_id,
+        "needed_module_ids": sorted(needed),
+        "excluded_module_ids": excluded_modules,
+        "parsed_files": [str(p.relative_to(root)) for p in ordered],
+    }
+    return ordered, meta
+
+
+def _build_scope_exports(root: Path, questions: list[dict[str, Any]], tmpdir: Path) -> dict[tuple, dict[str, Any]]:
+    """Build one scoped SQLite export per distinct (client_id, projection)."""
+    exports: dict[tuple, dict[str, Any]] = {}
+    for q in questions:
+        key = (q["client_id"], q["projection"])
+        if key in exports:
+            continue
+        paths, meta = resolve_scope_paths(root, key[0], key[1])
+        db = tmpdir / f"scope-{len(exports)}.sqlite"
+        e.export(root, db, paths=paths)
+        exports[key] = {"db": db, "meta": meta}
+    return exports
+
+
+def _evaluate_with_exports(
+    exports: dict[tuple, dict[str, Any]],
+    questions: list[dict[str, Any]],
+    overrides: Optional[dict[tuple, Path]] = None,
+) -> list[dict[str, Any]]:
+    """Evaluate each question against its scope export (or a per-scope override db)."""
+    overrides = overrides or {}
+    results: list[dict[str, Any]] = []
+    for q in questions:
+        key = (q["client_id"], q["projection"])
+        db = overrides.get(key) or exports[key]["db"]
+        conn = sqlite3.connect(db)
+        try:
+            results.append(evaluate_question(conn, q))
+        finally:
+            conn.close()
+    return sorted(results, key=lambda r: r["id"])
 
 
 # --------------------------------------------------------------------------- #
@@ -563,20 +757,32 @@ def _drift_scenarios() -> list[dict[str, Any]]:
     ]
 
 
-def run_drift_regression(base_db: Path, questions: list[dict[str, Any]], tmpdir: Path) -> dict[str, Any]:
-    """Prove each controlled drift isolates to exactly its one competency question."""
+def run_drift_regression(
+    exports: dict[tuple, dict[str, Any]], questions: list[dict[str, Any]], tmpdir: Path
+) -> dict[str, Any]:
+    """Prove each controlled drift isolates to exactly its one competency question.
+
+    The mutation is applied to a COPY of only the target question's scoped export;
+    every other question is still evaluated against its own clean scope. Isolation
+    therefore holds even when two questions share one scoped export (both Femme
+    questions share the ``local-seo`` scope), proving a single-point drift
+    pinpoints its question rather than failing everything (or nothing).
+    """
+    by_id = {q["id"]: q for q in questions}
     cases: list[dict[str, Any]] = []
     passed = True
     for i, scenario in enumerate(_drift_scenarios()):
+        target = by_id[scenario["expect_failed"]]
+        key = (target["client_id"], target["projection"])
         mutated = tmpdir / f"drift-{i}.sqlite"
-        shutil.copyfile(base_db, mutated)
+        shutil.copyfile(exports[key]["db"], mutated)
         conn = sqlite3.connect(mutated)
         try:
             scenario["mutate"](conn)
             conn.commit()
         finally:
             conn.close()
-        results = evaluate_suite(mutated, questions)
+        results = _evaluate_with_exports(exports, questions, overrides={key: mutated})
         failed_ids = sorted(r["id"] for r in results if r["status"] == "fail")
         expected_failed = [scenario["expect_failed"]]
         diagnostic = next((r["failures"] for r in results if r["id"] == scenario["expect_failed"]), [])
@@ -595,6 +801,57 @@ def run_drift_regression(base_db: Path, questions: list[dict[str, Any]], tmpdir:
 
 
 # --------------------------------------------------------------------------- #
+# Loading-isolation regression (projection-directed loading instrumentation)
+# --------------------------------------------------------------------------- #
+def run_loading_isolation_probes(root: Path, questions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Instrument each question's scope and prove loading is projection/client-directed.
+
+    For every question this resolves the exact file set the scoped export parses
+    and asserts (a) no file outside the named client's directory is read — no
+    other client is scanned — and (b) every client module the projection does NOT
+    reference is excluded from the parsed set. This is the direct, measurable
+    refutation of the "parses 9 Femme + 9 JMD files" finding: a Femme question now
+    parses only Femme files, and a projection that excludes a module never reads
+    it. Deterministic and read-only; no export or DB needed.
+    """
+    client_dirs = sorted(p.name for p in (root / "clients").glob("*") if p.is_dir())
+    cases: list[dict[str, Any]] = []
+    passed = True
+    for q in questions:
+        _paths, meta = resolve_scope_paths(root, q["client_id"], q["projection"])
+        rels = meta["parsed_files"]
+        prefix = f"clients/{q['client_id']}/"
+        foreign_files = sorted(r for r in rels if not r.startswith(prefix))
+        foreign_clients = sorted(
+            c for c in client_dirs
+            if c != q["client_id"] and any(r.startswith(f"clients/{c}/") for r in rels)
+        )
+        # Every excluded module's file must be absent from the parsed set.
+        excluded_leaked = sorted(
+            mid for mid in meta["excluded_module_ids"]
+            if any(r.endswith(f"{mid.split('.')[-1]}.yaml") and "/modules/" in r for r in rels)
+        )
+        ok = not foreign_files and not foreign_clients and not excluded_leaked
+        passed = passed and ok
+        cases.append(
+            {
+                "id": q["id"],
+                "client_id": q["client_id"],
+                "projection": q["projection"],
+                "parsed_file_count": len(rels),
+                "parsed_files": rels,
+                "needed_module_ids": meta["needed_module_ids"],
+                "excluded_module_ids": meta["excluded_module_ids"],
+                "foreign_files": foreign_files,
+                "foreign_clients_touched": foreign_clients,
+                "excluded_modules_leaked": excluded_leaked,
+                "ok": ok,
+            }
+        )
+    return {"passed": passed, "cases": cases}
+
+
+# --------------------------------------------------------------------------- #
 # Registry shape-validation regression (the malformed-registry negative case)
 # --------------------------------------------------------------------------- #
 def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
@@ -605,8 +862,10 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
     ``None`` (must NOT raise). These lock the exact false-passes the reviewers
     reproduced: a non-mapping query, an unknown select column, a misspelled guard
     operand, an unknown filter column, duplicate output keys, a wrong-typed
-    expect payload, a missing guard operand, an expected-row key typo, and a
-    projection_resources question missing its resources.
+    expect payload, a missing guard operand, an expected-row key typo, a
+    projection_resources question missing its resources, a status/field/id guard
+    not bound to a selected output key (silent no-op), a non-scalar filter
+    operand, and a row-field guard on a projection_resources answer.
     """
     def q(**over: Any) -> dict[str, Any]:
         base: dict[str, Any] = {
@@ -645,6 +904,40 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
         ("expect-row-key-typo", doc(q(expect={"rows": [{"entity_id": "c.x", "statsu": "draft"}]})), "do not match select output keys"),
         # projection_resources must define expect.resources (not rows).
         ("projection-resources-missing", doc(q(query={"op": "projection_resources"}, expect={"rows": []})), "expect.resources"),
+        # Reviewer A / Auditor: a status guard when 'status' is not selected is a
+        # silent no-op at evaluation → reject before evaluation.
+        ("forbid-status-not-selected",
+         doc(q(query={"op": "entities", "select": ["entity_id"]},
+               expect={"rows": [{"entity_id": "c.x"}]},
+               guards=[{"type": "forbid_status", "statuses": ["active"]}])),
+         "requires 'status'"),
+        # Reviewer A: forbid_id_prefix when neither entity_id nor rule_id is
+        # selected can never see an id → reject.
+        ("forbid-id-prefix-no-id-selected",
+         doc(q(query={"op": "entities", "select": ["status"]},
+               expect={"rows": [{"status": "draft"}]},
+               guards=[{"type": "forbid_id_prefix", "prefixes": ["other"]}])),
+         "requires the id column"),
+        # Reviewer A / Auditor exact repro: require_field_equals on a field that is
+        # not selected (misspelled 'statsu', value: null) is a dict.get()-None
+        # no-op → reject.
+        ("require-field-not-selected",
+         doc(q(query={"op": "entities", "select": ["entity_id", "status"]},
+               expect={"rows": [{"entity_id": "c.x", "status": "draft"}]},
+               guards=[{"type": "require_field_equals", "field": "statsu", "value": None}])),
+         "requires its field 'statsu'"),
+        # Auditor exact repro: a non-scalar filter operand (`status: {typo: draft}`)
+        # can never match a column value and would silently drop the filter → reject.
+        ("filter-operand-not-scalar",
+         doc(q(query={"op": "entities", "filters": {"status": {"typo": "draft"}}, "select": ["entity_id", "status"]},
+               expect={"rows": [{"entity_id": "c.x", "status": "draft"}]})),
+         "must be a scalar"),
+        # A row-field guard on a projection_resources answer has no row columns to
+        # read → reject rather than silently pass.
+        ("guard-not-applicable-to-resources",
+         doc(q(query={"op": "projection_resources"}, expect={"resources": {}},
+               guards=[{"type": "require_status", "statuses": ["active"]}])),
+         "does not apply to a projection_resources"),
     ]
 
 
@@ -681,7 +974,12 @@ def run_registry_negative_probes() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Reporting + CLI
 # --------------------------------------------------------------------------- #
-def _print_human(results: list[dict[str, Any]], drift: dict[str, Any], probes: dict[str, Any]) -> None:
+def _print_human(
+    results: list[dict[str, Any]],
+    drift: dict[str, Any],
+    probes: dict[str, Any],
+    loading: dict[str, Any],
+) -> None:
     print("Competency questions\n" + "=" * 20)
     for r in results:
         mark = "PASS" if r["status"] == "pass" else "FAIL"
@@ -703,6 +1001,16 @@ def _print_human(results: list[dict[str, Any]], drift: dict[str, Any], probes: d
         mark = "PASS" if case["ok"] else "FAIL"
         want = "accepted" if case["expected_substring"] is None else f"rejected ~ {case['expected_substring']!r}"
         print(f"[{mark}] {case['name']}: expected {want}")
+    print("\nLoading-isolation regression (projection-directed loading)\n" + "-" * 57)
+    for case in loading["cases"]:
+        mark = "PASS" if case["ok"] else "FAIL"
+        print(f"[{mark}] {case['id']}: parsed {case['parsed_file_count']} file(s) "
+              f"(client={case['client_id']}, projection={case['projection']}); "
+              f"excluded modules={case['excluded_module_ids']}")
+        if not case["ok"]:
+            print(f"       foreign files={case['foreign_files']} "
+                  f"foreign clients={case['foreign_clients_touched']} "
+                  f"excluded leaked={case['excluded_modules_leaked']}")
 
 
 def run(argv: Optional[list] = None) -> int:
@@ -726,14 +1034,26 @@ def run(argv: Optional[list] = None) -> int:
     # must be rejected (and the valid control accepted) before we trust any answer.
     probes = run_registry_negative_probes()
 
+    # Instrument projection-directed loading BEFORE building any export: prove no
+    # question's scoped load reaches another client or an unreferenced module.
+    try:
+        loading = run_loading_isolation_probes(root, questions)
+    except QuestionError as exc:
+        print(json.dumps({"error": str(exc)}) if args.json else f"registry error: {exc}", file=sys.stderr)
+        return 2
+
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
-        db_path = _export_temp(root, tmpdir)
-        results = evaluate_suite(db_path, questions)
-        drift = {"passed": True, "cases": []} if args.no_drift else run_drift_regression(db_path, questions, tmpdir)
+        try:
+            exports = _build_scope_exports(root, questions, tmpdir)
+        except QuestionError as exc:
+            print(json.dumps({"error": str(exc)}) if args.json else f"registry error: {exc}", file=sys.stderr)
+            return 2
+        results = _evaluate_with_exports(exports, questions)
+        drift = {"passed": True, "cases": []} if args.no_drift else run_drift_regression(exports, questions, tmpdir)
 
     failed_required = [r for r in results if r["status"] == "fail" and r["required"]]
-    exit_code = 1 if (failed_required or not drift["passed"] or not probes["passed"]) else 0
+    exit_code = 1 if (failed_required or not drift["passed"] or not probes["passed"] or not loading["passed"]) else 0
 
     if args.json:
         print(json.dumps(
@@ -744,15 +1064,17 @@ def run(argv: Optional[list] = None) -> int:
                 "results": results,
                 "drift_regression": drift,
                 "registry_probes": probes,
+                "loading_isolation": loading,
                 "exit_code": exit_code,
             },
             ensure_ascii=False,
             indent=2,
         ))
     else:
-        _print_human(results, drift, probes)
+        _print_human(results, drift, probes, loading)
         if exit_code == 0:
-            print(f"\nall {len(results)} competency question(s) passed; drift isolation + registry shape checks hold")
+            print(f"\nall {len(results)} competency question(s) passed; drift isolation + registry shape "
+                  "+ loading isolation checks hold")
         else:
             if failed_required:
                 print(f"\nFAILED: {len(failed_required)} required competency question(s) failed", file=sys.stderr)
@@ -761,6 +1083,9 @@ def run(argv: Optional[list] = None) -> int:
             if not probes["passed"]:
                 bad = [c["name"] for c in probes["cases"] if not c["ok"]]
                 print(f"FAILED: registry shape-validation regression did not reject/accept as expected: {bad}", file=sys.stderr)
+            if not loading["passed"]:
+                bad = [c["id"] for c in loading["cases"] if not c["ok"]]
+                print(f"FAILED: loading-isolation regression detected cross-client/unrelated-module leakage: {bad}", file=sys.stderr)
     return exit_code
 
 
