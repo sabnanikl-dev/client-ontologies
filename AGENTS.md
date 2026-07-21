@@ -40,7 +40,7 @@ Fresh session every time. Do not rely on prior chat context or `--continue`.
 
 ## Repository Map
 
-Key files: `README.md`, `docs/spec.md`, `docs/conventions.md`, `docs/examples.md`, `schemas/`, `scripts/validate_ontology.py`, and `scripts/export_sqlite.py`.
+Key files: `README.md`, `docs/spec.md`, `docs/conventions.md`, `docs/examples.md`, `schemas/`, `scripts/validate_ontology.py`, `scripts/export_sqlite.py`, and the read-only runtime consumer surface `scripts/ontology_service.py` + `scripts/ontology_cli.py` (packaged via `pyproject.toml`).
 
 Client layout: `clients/<client-slug>/client.yaml`, `modules/*.yaml` for canonical ontology facts/rules/relationships/workflows, and `projections/*.yaml` for curated consumer views.
 

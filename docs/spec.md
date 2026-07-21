@@ -260,11 +260,14 @@ client-ontologies/
     manifest.schema.json   # the kind: ontology per-client manifest
     module.schema.json
     projection.schema.json
+  pyproject.toml           # packages the core: ontology / ontology-mcp entry points, zero deps
   scripts/
     ontology_loader.py     # shared YAML parse + manifest-first enumeration
     validate_ontology.py   # canonical gate: schema then cross-reference pass
     check_rules.py         # machine_check guardrail engine (library + CLI)
     check_evidence.py      # evidence-health / content_hash checker (library + CLI)
+    ontology_service.py    # read-only runtime service: transport-agnostic ops (library)
+    ontology_cli.py        # read-only runtime CLI adapter over the service
     export_sqlite.py       # runtime SQLite projection
   tests/
     run_fixtures.py        # invalid fixtures must fail validation
@@ -272,13 +275,14 @@ client-ontologies/
     run_export.py          # valid fixture must validate + export
     run_competency.py      # outcome regression: projection/client-directed competency answers
     run_checks.py          # guardrail engine matching + exit semantics
+    run_cli.py             # runtime CLI/service: acceptance, YAML/SQLite parity, isolation
     run_evidence.py        # evidence-health hashing + strict exit semantics
     competency/
       questions.yaml       # test-owned competency registry (not a canonical kind)
     fixtures/
   .github/
     workflows/
-      validate.yml         # CI: validate, export, then run all six regression runners
+      validate.yml         # CI: validate, export, then run all regression runners
   clients/
     femme-events/
       client.yaml
@@ -333,8 +337,11 @@ The live tooling: `ontology_loader.py` (shared manifest-first YAML enumeration u
 both the validator and exporter), `validate_ontology.py` (the canonical gate),
 `check_rules.py` (the `machine_check` guardrail engine, importable and CLI),
 `check_evidence.py` (the evidence-health / `content_hash` checker, importable and CLI),
-and `export_sqlite.py` (the runtime SQLite projection). All are stdlib-only and shell out
-to `ruby -e` for YAML parsing, so the repo carries no pip/gem dependencies.
+`ontology_service.py` + `ontology_cli.py` (the read-only runtime consumer surface — see
+§14.5), and `export_sqlite.py` (the runtime SQLite projection). All are stdlib-only; the
+YAML-reading tools shell out to `ruby -e` for parsing, so the repo carries no pip/gem
+dependencies. `pyproject.toml` packages the core with `ontology` / `ontology-mcp` console
+entry points and zero runtime dependencies.
 
 #### `clients/<client-id>/`
 
@@ -1489,6 +1496,102 @@ and never on the advisory categories, so an unknown `--client` is a usage error
 (exit 2). This is why the CI step can run `--strict` and still be non-blocking for
 owner-only source paths. `docs/conventions.md` documents the anchor-vs-vendor
 decision and the re-confirmation workflow.
+
+### 14.5 Read-only runtime consumer surface
+
+Sections 14.1–14.2 are consumed at runtime by a single, transport-agnostic core
+(`scripts/ontology_service.py`) behind thin adapters, so the transport choice is
+additive rather than a rewrite:
+
+```text
+scripts/ontology_loader.py   -- load + resolve projections (stdlib, §5, #21)
+scripts/check_rules.py       -- machine_check engine (stdlib, §14.2, #11)
+scripts/ontology_service.py  -- transport-agnostic operations, plain JSON dicts (#19)
+        |
+        +-- scripts/ontology_cli.py   <- v1 NOW  (stdlib CLI; CI / git-hook / test friendly)
+        +-- server/ontology_mcp.py    <- NEXT     (thin MCP stdio adapter; isolated, mcp SDK)
+        +-- server/ontology_api.py    <- LATER    (thin HTTP adapter; purely additive)
+```
+
+**Placement & distribution (decision).** The CLI, the future MCP server, and the
+shared core all live in this repository, co-located with the schema and data they
+interpret. Consumers **register/install this implementation** rather than
+reimplementing parse + guardrail logic downstream — reimplementation forks
+canonical semantics and violates AGENTS.md ("consumers use projections/exports; do
+not redefine canonical truth"). This mirrors Foundry: semantics stay with the
+ontology, and a consumer gets a thin client, not a logic copy. `pyproject.toml`
+packages the core with `ontology` (CLI) and `ontology-mcp` console entry points and
+**zero runtime dependencies**; an agentic-harness consumer pins it by tag/SHA. The
+CLI is the deterministic CI / pre-publish enforcement surface; MCP (next PR) is the
+agent's primary query surface; a consumer that needs a Ruby-free path reads the
+SQLite projection (§12.2).
+
+**Operations (v1, read-only).** Each is a `ontology_service.py` function returning
+a plain JSON dict; the CLI prints the JSON and sets an exit code. Modeling an
+operation never grants authority to run it (§0 non-goals; AGENTS.md core rule 6) —
+there is **no create/modify/delete** and no live account/CMS/GBP mutation.
+
+| Operation | CLI | Returns |
+|---|---|---|
+| `list_clients()` | `ontology list-clients` | `[{id, name, status, client_type}]` |
+| `get_client_context(client, projection?)` | `ontology context --client <slug> [--projection <id>]` | projection-scoped entities + active rules, each status/confidence-tagged; `draft`/`inferred` flagged `planning_only` |
+| `list_rules(client, severity?, workstream?)` | `ontology rules --client <slug> [--severity <sev>] [--workstream <ws>]` | the client's guardrail rules |
+| `check_copy(client, text, projection?\|workstream?, fail_on)` | `ontology check-copy --client <slug> (--text\|--file\|stdin) [--fail-on warning]` | `{violations, exit_code}`; **non-zero exit inherited verbatim from §14.2 / issue #11** |
+| `get_projection(projection)` | `ontology projection --id <id>` | resolved slice (`includes` + resolved entities/rules) + provenance |
+
+The default projection for `get_client_context` is `<client>.agent-context`. Every
+response carries a `_meta` envelope: `read_mode` (`yaml`|`sqlite`), `repo_commit`,
+and `generated_at`. `repo_commit` is derived **only** from a concrete ontology
+`--root` (the `yaml` backend); a `sqlite` dataset has no root and embeds no
+provenance, so its `repo_commit` is `null`. It is never taken from the ambient
+working directory's Git state — an installed consumer running the CLI inside its
+own repository must not have that consumer repo's commit mislabelled as ontology
+provenance.
+
+**Two backends, one model.** `--source yaml` (default) reads canonical YAML through
+the shared loader (§5) and uses Ruby; `--source sqlite --sqlite-path <db>` reads a
+prebuilt SQLite export (§12.2) with pure stdlib `sqlite3` and **never invokes
+Ruby**. Both reconstruct the same per-resource documents (the export stores each
+resource's full `raw_json`), so YAML and SQLite answers are equivalent — proven
+against the competency corpus (§ `tests/run_cli.py` reuses issue #31's
+`evaluate_suite`/`load_questions` without re-encoding any expected value).
+
+**Fail-closed contract.** An unknown client/projection, an **unrecognized
+`--workstream`** (a scope typo must never silently select zero rules and let a
+blocking `check_copy` report a clean pass), a `--source yaml --root` that is not a
+client-ontologies checkout (no `clients/` — so an installed consumer's own repo
+does not yield an empty, vacuously "clean" result), an unavailable SQLite file, and
+malformed arguments (including argparse usage errors) all produce a structured
+`{"error": …}` on stderr and a non-zero exit (`2`). A SQLite backend is
+**authenticated before any operation reads it**: every table the exporter writes
+must be present and the core tables non-empty; each row's primary id must agree
+with its `raw_json` id and name a client in the same export; and the normalized
+`rules`/`entities` tables must match the rules/entities embedded in the module
+`raw_json` the service reads — so an incomplete, foreign, forged, or drifted
+snapshot (e.g. one whose module documents were emptied to suppress a blocking rule)
+fails closed instead of returning a clean-looking enforcement result. Projection
+-scoped operations never return an entity, rule, or module outside the selected
+projection. `draft`/`inferred` resources — e.g. Femme's `baseline: unknown`
+local-visibility metrics (§15) — are flagged `planning_only` and are never
+serialized or described as recorded outcomes, baselines, or targets.
+
+**Installed-consumer contract.** The packaged `ontology` command runs with the
+consumer repo as its cwd, so it must be pointed at a snapshot explicitly: a
+consumer pins a SQLite export and calls `--source sqlite --sqlite-path <pinned
+db>` (pure stdlib `sqlite3`, no Ruby, `repo_commit: null`), or, if it checks out
+this repo, `--source yaml --root <checkout>`. CI builds the export on every push
+today, but publishing it as a fetchable versioned artifact is issue #8's scope
+and not yet wired up — until then the consumer produces the snapshot itself with
+`export_sqlite.py`. The default ambient `--root .` fails closed in a consumer
+repo rather than searching it.
+
+`check_copy` is the enforcement surface: as a pre-publish git hook in a consumer
+repo it exits non-zero on a blocking violation before anything ships. See
+`docs/examples.md` (Example 8) and the README ("Runtime consumer surface"). The
+`ontology-mcp` entry point is registered now for packaging completeness; the MCP
+stdio adapter itself (`server/`) is the next PR, so that entry point currently fails
+closed with a structured "not yet implemented" notice. An HTTP adapter is a later,
+purely additive option and is **not** part of v1.
 
 ---
 

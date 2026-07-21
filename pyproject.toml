@@ -1,0 +1,51 @@
+# Packaging for the read-only ontology runtime surface (issue #19).
+#
+# The shared core (`scripts/ontology_service.py`) and its CLI adapter
+# (`scripts/ontology_cli.py`) live in this repo, co-located with the schema and
+# data they interpret, so consumers register/install this implementation rather
+# than reimplementing parse + guardrail logic downstream (AGENTS.md: "consumers
+# use projections/exports; do not redefine canonical truth"). An agentic-harness
+# consumer pins this by tag/SHA — not a separately published package yet
+# (premature at two clients).
+#
+# The core + CLI add NO runtime dependencies (stdlib only; the `yaml` backend
+# shells out to Ruby via the shared loader, the `sqlite` backend does not). Only
+# the future MCP adapter (next PR, isolated under `server/`) pulls the `mcp` SDK.
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "client-ontologies"
+version = "0.1.0"
+description = "Read-only runtime consumer surface (shared core + CLI) for the client operating ontologies."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "UNLICENSED" }
+# Intentionally empty: the shared core and CLI are stdlib-only.
+dependencies = []
+
+[project.scripts]
+# v1 (this PR): the CLI is the deterministic enforcement/CI surface.
+ontology = "ontology_cli:main"
+# NEXT PR: the thin MCP stdio adapter (server/ontology_mcp.py). The entry point
+# is registered now so the packaging contract is complete; until the adapter
+# ships it fails closed with a structured "not yet implemented" notice rather
+# than exposing a partial/unsafe MCP surface.
+ontology-mcp = "ontology_cli:mcp_entrypoint"
+
+# The scripts/ directory is the importable package root. Modules stay runnable as
+# plain scripts (`python3 scripts/validate_ontology.py`) AND importable once
+# installed (`import ontology_service`).
+[tool.setuptools]
+package-dir = { "" = "scripts" }
+py-modules = [
+  "ontology_service",
+  "ontology_cli",
+  "ontology_loader",
+  "check_rules",
+  "check_evidence",
+  "export_sqlite",
+  "validate_ontology",
+]
