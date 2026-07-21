@@ -1176,6 +1176,48 @@ def _json_scalar_eq(a: Any, b: Any) -> bool:
     return json.dumps(a, sort_keys=True, ensure_ascii=False) == json.dumps(b, sort_keys=True, ensure_ascii=False)
 
 
+def _operand_sort_key(value: Any) -> tuple[int, str]:
+    """Deterministic, type-sensitive sort key for a single JSON scalar operand.
+
+    Native ``sorted()`` cannot order incomparable Python scalar types (a ``bool``
+    against a ``str``, an ``int`` against a ``str``), so a guard *diagnostic* that
+    rendered an accepted **heterogeneous** membership operand raised ``TypeError``
+    instead of returning a deterministic guard failure. A ``require_field_in`` /
+    ``forbid_field_in`` operand is validated as a non-empty list of scalars, and on
+    an intentionally untyped ``fields.<name>`` selection there is no column type to
+    homogenize it — so ``values: [false, "x"]`` is a legal registry operand (Codex
+    Reviewer B / Default Hermes).
+
+    The key ranks by JSON scalar type first — ``bool`` never shares a rank with
+    ``int``/``float``, so ``False``/``0`` and ``True``/``1`` never collapse (no
+    Python equality aliasing) — and then by canonical JSON text. Ordering is thus
+    total across every registry-accepted scalar type, stable, and
+    order-independent: two equivalent operand orders render identically.
+    """
+    if value is None:
+        rank = 0
+    elif isinstance(value, bool):  # before int: bool is an int subclass
+        rank = 1
+    elif isinstance(value, (int, float)):
+        rank = 2
+    else:  # str (the only remaining registry-accepted scalar)
+        rank = 3
+    return (rank, json.dumps(value, sort_keys=True, ensure_ascii=False))
+
+
+def _render_operand_list(values: Any) -> str:
+    """Render a list of JSON scalars as canonical JSON in a deterministic order.
+
+    Diagnostics-only: comparison semantics are untouched (membership still tests
+    via ``_json_scalar_eq``). This renders the operand set for the human failure
+    message without ever calling native ``sorted()`` on incomparable scalar types,
+    so a schema/registry-accepted heterogeneous membership operand yields a stable
+    failure string rather than raising.
+    """
+    ordered = sorted(values or [], key=_operand_sort_key)
+    return "[" + ", ".join(json.dumps(v, ensure_ascii=False) for v in ordered) + "]"
+
+
 def _compare_rows(expected: list[dict[str, Any]], actual: list[dict[str, Any]]) -> list[str]:
     """Return human diagnostics for an expected-vs-actual row-set mismatch.
 
@@ -1286,14 +1328,14 @@ def _check_guards(op: str, actual: Any, guards: list[dict[str, Any]]) -> list[st
             bad = sorted({str(r.get(field)) for r in rows
                           if not any(_json_scalar_eq(r.get(field), v) for v in values)})
             if bad:
-                failures.append(f"guard require_field_in: {field!r} must be in {sorted(values)}, saw {bad}")
+                failures.append(f"guard require_field_in: {field!r} must be in {_render_operand_list(values)}, saw {bad}")
         elif gtype == "forbid_field_in":
             field = guard.get("field")
             values = guard.get("values") or []
             bad = sorted({str(r.get(field)) for r in rows
                           if any(_json_scalar_eq(r.get(field), v) for v in values)})
             if bad:
-                failures.append(f"guard forbid_field_in: {field!r} must not be in {sorted(values)}, saw {bad}")
+                failures.append(f"guard forbid_field_in: {field!r} must not be in {_render_operand_list(values)}, saw {bad}")
         elif gtype == "require_edge_confidence_in":
             values = set(guard.get("values") or [])
             bad = sorted({c for c in _edge_confidences_of(actual) if c not in values})
@@ -2398,6 +2440,74 @@ def run_reporting_seam_probes(tmpdir: Path) -> dict[str, Any]:
     record("json-scalar-eq-true-ne-one", _json_scalar_eq(True, 1) is False, None)
     record("json-scalar-eq-bool-matches",
            _json_scalar_eq(False, False) and _json_scalar_eq(True, True), None)
+
+    # Heterogeneous-scalar membership DIAGNOSTIC seam (Codex Reviewer B / Default
+    # Hermes, final operator-envelope exact-head review). A ``require_field_in`` /
+    # ``forbid_field_in`` operand on an intentionally UNTYPED ``fields.<name>``
+    # selection is validated only as a non-empty scalar list — so a heterogeneous
+    # list (``values: [false, "x"]``) is a legal registry operand. The failure
+    # formatter previously called native ``sorted(values)``; Python cannot order a
+    # ``bool`` against a ``str``, so an accepted guard raised ``TypeError`` instead
+    # of returning a deterministic guard failure. Prove end to end, for BOTH
+    # membership guards: (a) ``validate_questions()`` accepts the operand,
+    # (b) guard evaluation returns a non-empty failure and never raises,
+    # (c) rendering is order-independent, and (d) it stays type-sensitive (no
+    # ``False``/``0`` or ``True``/``1`` aliasing).
+    def _het_doc(gtype: str, values: list[Any]) -> dict[str, Any]:
+        return {"questions": [{
+            "id": "seam.het", "client_id": "femme", "projection": "femme.public-site",
+            "question": "heterogeneous membership operand diagnostic probe",
+            "rationale": "an accepted heterogeneous operand must render, not crash",
+            "required": False,  # a deliberately empty positive answer is non-gating
+            "query": {"op": "entities", "select": ["entity_id", "fields.flag"]},
+            "guards": [{"type": gtype, "field": "flag", "values": values}],
+            "expect": {"rows": []},
+        }]}
+
+    def _het_validates(gtype: str, values: list[Any]) -> bool:
+        try:
+            return len(validate_questions(_het_doc(gtype, values), "seam-het")) == 1
+        except QuestionError:
+            return False
+
+    def _het_eval(gtype: str, values: list[Any], flag: Any) -> Optional[list[str]]:
+        try:
+            return _check_guards("entities", [{"entity_id": "c.e", "flag": flag}],
+                                 [{"type": gtype, "field": "flag", "values": values}])
+        except Exception:  # the TypeError crash this fix removes — a raise fails the case
+            return None
+
+    _HET = [False, "x"]
+    for gtype, actual in (("require_field_in", 7), ("forbid_field_in", False)):
+        # (a) end-to-end registry acceptance of the heterogeneous operand.
+        record(f"het-{gtype}-validate-accepts", _het_validates(gtype, _HET), None)
+        # (b) the exact Reviewer B / Hermes reproduction: guard evaluation returns a
+        #     non-empty failure and NEVER raises.
+        msg = _het_eval(gtype, _HET, actual)
+        record(f"het-{gtype}-eval-fails-without-raise", bool(msg), msg)
+        # (c) order-independent rendering: the reversed operand yields the same message.
+        record(f"het-{gtype}-order-independent",
+               msg is not None and msg == _het_eval(gtype, list(reversed(_HET)), actual), msg)
+
+    # (d) type-sensitive rendering with NO Python equality aliasing: bool ``false``,
+    #     int ``0``, and string ``"0"`` render as three distinct JSON tokens (and
+    #     likewise ``true`` / ``1`` / ``"1"``).
+    record("het-render-false-zero-str-distinct",
+           _render_operand_list([False, 0, "0"]) == '[false, 0, "0"]', None)
+    record("het-render-true-one-str-distinct",
+           _render_operand_list([True, 1, "1"]) == '[true, 1, "1"]', None)
+    # Renderer-level order independence: two operand orders collapse to one text.
+    record("het-render-order-independent",
+           _render_operand_list([False, "x", 7]) == _render_operand_list([7, "x", False]) == '[false, 7, "x"]',
+           None)
+    # The fix is load-bearing: native sorted() on the SAME operand would raise.
+    def _native_sort_raises(values: list[Any]) -> bool:
+        try:
+            sorted(values)
+            return False
+        except TypeError:
+            return True
+    record("het-native-sorted-would-raise", _native_sort_raises([False, "x"]), None)
 
     passed = all(c["ok"] for c in cases)
     return {"passed": passed, "cases": cases}

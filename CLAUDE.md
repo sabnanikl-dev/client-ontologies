@@ -107,7 +107,11 @@ non-gating), **reporting-seam** (a synthetic fixture proves a `public_facing`
 boolean stored as SQLite `0/1` normalizes back to a real `bool` and comparison is
 JSON/type-sensitive so `false` ≠ `0`, both for row comparison and for
 field-guard evaluation — a boolean row never loosely satisfies an int/str guard
-operand — and that `--no-drift` represents the drift
+operand; a `require_field_in`/`forbid_field_in` diagnostic renders even a
+heterogeneous accepted scalar operand (e.g. `[false, "x"]` on an untyped
+`fields.*` selection) deterministically and type-sensitively without a native
+cross-type `sorted()`, so an accepted guard returns a stable failure instead of
+raising — and that `--no-drift` represents the drift
 regression **explicitly as skipped** rather than silently "passed"), and
 **registry shape-validation** (a malformed question — including a
 non-string `id`/`client_id`/`projection`, a non-boolean `required`, a required
