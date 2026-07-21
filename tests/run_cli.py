@@ -317,6 +317,119 @@ def test_error_forged_rawid_mismatch(canonical_db: Path) -> None:
         check("error" in json.loads(err), "row-id/raw-id mismatch must be structured")
 
 
+def test_error_sqlite_same_id_rule_tampering(canonical_db: Path) -> None:
+    """Same-ID SEMANTIC tampering (Codex Reviewer A, exception-cycle #1): a genuine
+    full export whose module ``raw_json`` keeps the blocking rule's ID but rewrites
+    its ``machine_check`` (so it no longer matches ``Add to cart today``), while the
+    normalized ``rules`` table is left intact. The ID sets still agree, so an
+    id-set-only check would pass and the rewritten module document the service
+    reads would suppress the blocking rule. Full-content authentication must fail
+    closed with structured exit 2."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tampered = Path(tmp) / "same-id-tamper.sqlite"
+        shutil.copyfile(canonical_db, tampered)
+        conn = sqlite3.connect(tampered)
+        try:
+            row = conn.execute(
+                "SELECT raw_json FROM modules WHERE module_id = ?", ("jmd-menswear.website",)
+            ).fetchone()
+            doc = json.loads(row[0])
+            hit = False
+            for rule in doc.get("rules") or []:
+                if rule.get("id") == "jmd-menswear.website.showroom-not-ecommerce":
+                    # Keep the id; neuter the executable check the service runs.
+                    rule["machine_check"] = {
+                        "type": "disallowed_terms",
+                        "disallowed_terms": ["never-match-this"],
+                    }
+                    hit = True
+            check(hit, "precondition: showroom-not-ecommerce must be present to tamper with")
+            conn.execute(
+                "UPDATE modules SET raw_json = ? WHERE module_id = ?",
+                (json.dumps(doc), "jmd-menswear.website"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        code, out, err = run_cli(
+            ["check-copy", "--client", "jmd-menswear", "--text", "Add to cart today",
+             "--source", "sqlite", "--sqlite-path", str(tampered)]
+        )
+        check(code == 2, f"same-id rule tampering must fail closed with exit 2, got {code} (out={out!r})")
+        check("error" in json.loads(err), "same-id rule tampering must be structured")
+
+
+def test_error_sqlite_correlated_module_deletion(canonical_db: Path) -> None:
+    """Correlated deletion (Codex Reviewer B, exception-cycle #2): delete a
+    manifest-declared module AND its normalized rules/entities descendants
+    together, leaving the manifest intact. The normalized-vs-embedded content
+    check is vacuously consistent (both sides lose the module's resources), so
+    manifest-membership validation must catch the manifest still declaring the
+    now-absent module and fail closed with structured exit 2."""
+    with tempfile.TemporaryDirectory() as tmp:
+        deleted = Path(tmp) / "correlated-delete.sqlite"
+        shutil.copyfile(canonical_db, deleted)
+        conn = sqlite3.connect(deleted)
+        try:
+            # Delete the module row and every normalized descendant that referenced
+            # it — but NOT its manifest declaration.
+            conn.execute("DELETE FROM modules WHERE module_id = ?", ("jmd-menswear.website",))
+            conn.execute("DELETE FROM rules WHERE module_id = ?", ("jmd-menswear.website",))
+            conn.execute("DELETE FROM entities WHERE module_id = ?", ("jmd-menswear.website",))
+            conn.execute("DELETE FROM relationships WHERE module_id = ?", ("jmd-menswear.website",))
+            conn.commit()
+            # Sanity: the manifest still declares the deleted module.
+            man = json.loads(
+                conn.execute(
+                    "SELECT raw_json FROM manifests WHERE client_id = ?", ("jmd-menswear",)
+                ).fetchone()[0]
+            )
+            declared = {m.get("id") for m in man.get("modules") or []}
+            check("jmd-menswear.website" in declared, "precondition: manifest must still declare the deleted module")
+        finally:
+            conn.close()
+        code, out, err = run_cli(
+            ["check-copy", "--client", "jmd-menswear", "--text", "Add to cart today",
+             "--source", "sqlite", "--sqlite-path", str(deleted)]
+        )
+        check(code == 2, f"correlated module deletion must fail closed with exit 2, got {code} (out={out!r})")
+        check("error" in json.loads(err), "correlated module deletion must be structured")
+
+
+def test_error_sqlite_embedded_owner_drift(canonical_db: Path) -> None:
+    """Embedded ownership drift (Integration Auditor, exception-cycle #3): rewrite
+    only a module's EMBEDDED ``raw_json.client_id`` (jmd-menswear -> femme-events, a
+    real client) while leaving the SQL row owner, normalized rules, and all IDs
+    unchanged. The service selects modules by the embedded value, so the JMD
+    website module would silently drop out of JMD enforcement. Embedded-owner/SQL-
+    owner authentication must fail closed with structured exit 2."""
+    with tempfile.TemporaryDirectory() as tmp:
+        drifted = Path(tmp) / "owner-drift.sqlite"
+        shutil.copyfile(canonical_db, drifted)
+        conn = sqlite3.connect(drifted)
+        try:
+            row = conn.execute(
+                "SELECT client_id, raw_json FROM modules WHERE module_id = ?",
+                ("jmd-menswear.website",),
+            ).fetchone()
+            check(row[0] == "jmd-menswear", "precondition: SQL owner must be jmd-menswear")
+            doc = json.loads(row[1])
+            doc["client_id"] = "femme-events"  # embedded owner only; SQL owner untouched
+            conn.execute(
+                "UPDATE modules SET raw_json = ? WHERE module_id = ?",
+                (json.dumps(doc), "jmd-menswear.website"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        code, out, err = run_cli(
+            ["check-copy", "--client", "jmd-menswear", "--text", "Add to cart today",
+             "--source", "sqlite", "--sqlite-path", str(drifted)]
+        )
+        check(code == 2, f"embedded owner drift must fail closed with exit 2, got {code} (out={out!r})")
+        check("error" in json.loads(err), "embedded owner drift must be structured")
+
+
 def test_error_yaml_root_not_a_repo() -> None:
     """The default `--source yaml --root .` pointed at a non-checkout (e.g. an
     installed consumer's own repo) must fail closed, not return an empty and
@@ -681,6 +794,9 @@ def main() -> int:
             ("error_foreign_partial_sqlite_no_bypass", lambda: test_error_foreign_partial_sqlite_no_bypass()),
             ("error_drifted_sqlite_suppressed_rule", lambda: test_error_drifted_sqlite_suppressed_rule(canonical_db)),
             ("error_forged_rawid_mismatch", lambda: test_error_forged_rawid_mismatch(canonical_db)),
+            ("error_sqlite_same_id_rule_tampering", lambda: test_error_sqlite_same_id_rule_tampering(canonical_db)),
+            ("error_sqlite_correlated_module_deletion", lambda: test_error_sqlite_correlated_module_deletion(canonical_db)),
+            ("error_sqlite_embedded_owner_drift", lambda: test_error_sqlite_embedded_owner_drift(canonical_db)),
             ("error_yaml_root_not_a_repo", lambda: test_error_yaml_root_not_a_repo()),
             ("sqlite_provenance_not_ambient", lambda: test_sqlite_provenance_not_ambient(ds_yaml, ds_sqlite)),
             ("installed_consumer_snapshot_contract", lambda: test_installed_consumer_snapshot_contract(canonical_db)),

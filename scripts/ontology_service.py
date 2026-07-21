@@ -169,10 +169,24 @@ def _validate_export(conn: sqlite3.Connection) -> None:
       3. each row's primary-id column agrees with its ``raw_json`` ``id`` (no
          forged/mismatched row-id vs raw-id), and its ``client_id`` names a real
          client in this same export (no orphan/foreign ownership);
-      4. the normalized ``rules``/``entities`` tables agree exactly with the
-         rules/entities embedded in the module ``raw_json`` the service actually
-         reads — so a snapshot whose module documents were emptied or tampered
-         (to suppress a blocking rule) fails as internally inconsistent.
+      4. every manifest's identity/ownership is intact (``manifest_id`` and
+         embedded ``client_id`` agree with the row) AND every module/projection
+         the manifest DECLARES is actually present as a row — so deleting a
+         module/projection together with its normalized descendants, while
+         leaving the manifest untouched, fails closed instead of quietly
+         shrinking the enforced set to an empty-but-consistent slice (Reviewer B:
+         correlated deletion);
+      5. each module's and projection's EMBEDDED ``raw_json.client_id`` equals its
+         SQL row owner — the service selects modules by the embedded value, so an
+         embedded-owner rewrite (SQL owner untouched) would silently move a module
+         out of its real client's enforcement (Integration Auditor: ownership
+         drift);
+      6. the normalized ``rules``/``entities`` tables agree with the rules/
+         entities embedded in the module ``raw_json`` the service actually reads,
+         by FULL CONTENT — not merely id sets — so a same-id semantic rewrite of a
+         rule's ``machine_check``/``status``/``severity``/``evidence`` (which keeps
+         the id set intact) fails as internally inconsistent rather than
+         suppressing a blocking rule (Reviewer A: same-id tampering).
 
     Any failure raises ``ServiceError`` (mapped to a structured, non-zero CLI
     error). Genuine exports produced by ``export_sqlite.py`` always pass.
@@ -213,11 +227,46 @@ def _validate_export(conn: sqlite3.Connection) -> None:
             )
         client_ids.add(cid)
 
-    for table, id_col in (
-        ("modules", "module_id"),
-        ("projections", "projection_id"),
-        ("entities", "entity_id"),
-        ("rules", "rule_id"),
+    # Manifests are the membership authority: identity + embedded ownership must
+    # be intact, and we record every module/projection they DECLARE so a
+    # correlated deletion (row + normalized descendants) can be caught below —
+    # the manifest still declaring a now-absent module is the tell (Reviewer B).
+    declared_modules: set = set()
+    declared_projections: set = set()
+    for mid, owner, raw in conn.execute("SELECT manifest_id, client_id, raw_json FROM manifests"):
+        doc = _raw("manifests", mid, raw)
+        if doc.get("id") != mid:
+            raise ServiceError(
+                f"manifests row {mid!r} disagrees with its raw_json id "
+                f"{doc.get('id')!r}: drifted/tampered export."
+            )
+        if doc.get("client_id") != owner:
+            raise ServiceError(
+                f"manifests row {mid!r} SQL owner {owner!r} disagrees with its "
+                f"embedded client_id {doc.get('client_id')!r}: ownership drift."
+            )
+        if owner not in client_ids:
+            raise ServiceError(
+                f"manifests row {mid!r} references unknown client {owner!r}: "
+                f"foreign or internally inconsistent export."
+            )
+        for m in doc.get("modules") or []:
+            if isinstance(m, dict) and isinstance(m.get("id"), str):
+                declared_modules.add(m["id"])
+        for p in doc.get("projections") or []:
+            if isinstance(p, dict) and isinstance(p.get("id"), str):
+                declared_projections.add(p["id"])
+
+    # Per-resource rows: row-id/raw-id agreement, known owner, and — for the
+    # top-level module/projection documents the service selects BY THEIR EMBEDDED
+    # client_id — embedded-owner/SQL-owner agreement (Integration Auditor).
+    module_ids: set = set()
+    projection_ids: set = set()
+    for table, id_col, check_embedded_owner in (
+        ("modules", "module_id", True),
+        ("projections", "projection_id", True),
+        ("entities", "entity_id", False),
+        ("rules", "rule_id", False),
     ):
         for row_id, owner, raw in conn.execute(
             f"SELECT {id_col}, client_id, raw_json FROM {table}"
@@ -233,35 +282,87 @@ def _validate_export(conn: sqlite3.Connection) -> None:
                     f"{table} row {row_id!r} references unknown client {owner!r}: "
                     f"foreign or internally inconsistent export."
                 )
+            if check_embedded_owner and doc.get("client_id") != owner:
+                raise ServiceError(
+                    f"{table} row {row_id!r} SQL owner {owner!r} disagrees with "
+                    f"its embedded client_id {doc.get('client_id')!r}: ownership "
+                    f"drift (the service selects this resource by the embedded "
+                    f"value, so it would silently change client)."
+                )
+            if table == "modules":
+                module_ids.add(row_id)
+            elif table == "projections":
+                projection_ids.add(row_id)
+
+    # Manifest membership: every DECLARED module/projection must exist as a row.
+    # Deleting a module together with its normalized rules/entities leaves the
+    # rule/entity content check (below) vacuously consistent, so this is the
+    # layer that catches a correlated deletion behind an intact manifest.
+    missing_modules = sorted(declared_modules - module_ids)
+    if missing_modules:
+        raise ServiceError(
+            f"SQLite export is internally inconsistent: manifest declares "
+            f"module(s) {missing_modules} that are absent from the 'modules' "
+            f"table (correlated deletion behind an intact manifest). Rebuild it "
+            f"with scripts/export_sqlite.py."
+        )
+    missing_projections = sorted(declared_projections - projection_ids)
+    if missing_projections:
+        raise ServiceError(
+            f"SQLite export is internally inconsistent: manifest declares "
+            f"projection(s) {missing_projections} that are absent from the "
+            f"'projections' table (correlated deletion behind an intact "
+            f"manifest). Rebuild it with scripts/export_sqlite.py."
+        )
 
     # Cross-check the normalized rule/entity tables against the module documents
-    # the service reads at runtime. A real export writes each rule/entity into
-    # BOTH places; if they disagree the snapshot is inconsistent (a suppressed
-    # blocking rule is exactly this shape) and must fail closed.
-    norm_rules = {r[0] for r in conn.execute("SELECT rule_id FROM rules")}
-    norm_entities = {r[0] for r in conn.execute("SELECT entity_id FROM entities")}
-    raw_rules: set = set()
-    raw_entities: set = set()
+    # the service reads at runtime, by FULL CONTENT. A real export writes each
+    # rule/entity into BOTH places identically; if the same id disagrees in any
+    # field (machine_check/status/severity/evidence) the snapshot is tampered (a
+    # suppressed blocking rule is exactly this shape) and must fail closed —
+    # comparing id sets alone would miss same-id semantic drift (Reviewer A).
+    def _docs(table: str, id_col: str) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for row_id, raw in conn.execute(f"SELECT {id_col}, raw_json FROM {table}"):
+            out[row_id] = json.loads(raw) if raw else {}
+        return out
+
+    norm_rule_docs = _docs("rules", "rule_id")
+    norm_entity_docs = _docs("entities", "entity_id")
+    raw_rule_docs: dict[str, Any] = {}
+    raw_entity_docs: dict[str, Any] = {}
     for (raw,) in conn.execute("SELECT raw_json FROM modules"):
         doc = json.loads(raw) if raw else {}
-        for rule in (doc.get("rules") or []) if isinstance(doc, dict) else []:
-            if isinstance(rule, dict) and rule.get("id"):
-                raw_rules.add(rule["id"])
-        for ent in (doc.get("entities") or []) if isinstance(doc, dict) else []:
-            if isinstance(ent, dict) and ent.get("id"):
-                raw_entities.add(ent["id"])
-    if norm_rules != raw_rules:
-        raise ServiceError(
-            "SQLite export is internally inconsistent: the normalized 'rules' "
-            "table does not match the rules embedded in module raw_json "
-            "(drift/tampering). Rebuild it with scripts/export_sqlite.py."
-        )
-    if norm_entities != raw_entities:
-        raise ServiceError(
-            "SQLite export is internally inconsistent: the normalized 'entities' "
-            "table does not match the entities embedded in module raw_json "
-            "(drift/tampering). Rebuild it with scripts/export_sqlite.py."
-        )
+        if not isinstance(doc, dict):
+            continue
+        for rule in doc.get("rules") or []:
+            if isinstance(rule, dict) and isinstance(rule.get("id"), str):
+                raw_rule_docs[rule["id"]] = rule
+        for ent in doc.get("entities") or []:
+            if isinstance(ent, dict) and isinstance(ent.get("id"), str):
+                raw_entity_docs[ent["id"]] = ent
+
+    def _require_content_agreement(kind: str, normalized: dict[str, Any], embedded: dict[str, Any]) -> None:
+        if set(normalized) != set(embedded):
+            raise ServiceError(
+                f"SQLite export is internally inconsistent: the normalized "
+                f"{kind!r} table does not match the {kind} embedded in module "
+                f"raw_json (drift/tampering). Rebuild it with "
+                f"scripts/export_sqlite.py."
+            )
+        singular = kind[:-1]
+        for _id in normalized:
+            if normalized[_id] != embedded[_id]:
+                raise ServiceError(
+                    f"SQLite export is internally inconsistent: {singular} "
+                    f"{_id!r} differs between the normalized {kind!r} table and "
+                    f"its module raw_json (same-id semantic drift/tampering, e.g. "
+                    f"machine_check/status/severity/evidence). Rebuild it with "
+                    f"scripts/export_sqlite.py."
+                )
+
+    _require_content_agreement("rules", norm_rule_docs, raw_rule_docs)
+    _require_content_agreement("entities", norm_entity_docs, raw_entity_docs)
 
 
 def _load_from_sqlite(sqlite_path: Optional[Path]) -> Dataset:
