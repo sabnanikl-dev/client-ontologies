@@ -20,12 +20,47 @@ kind: competency_suite
 #   entities             — entity rows in the projection's scope, filtered/selected
 #   rules                — rule rows in the projection's scope, filtered/selected
 #   projection_resources — the projection's declared modules/entities/rules
+#   relationships        — subject/predicate/object edge rows in scope (issue #41);
+#                          an edge surfaces ONLY if its module is in scope AND both
+#                          endpoints are in-scope entities (endpoint isolation)
+#   path                 — deliberately bounded, deterministic multi-hop traversal
+#                          (issue #41); names explicit start/end constraints,
+#                          allowed `predicates`, and `min_hops`/`max_hops`. Simple
+#                          paths only, capped; every node/edge stays in scope. This
+#                          is NOT a general graph-query language (no GraphRAG,
+#                          embeddings, model grading, or second store).
 #
 # Guard types (safety / status / isolation boundaries):
-#   require_status     — every returned row's status must be in `statuses`
-#   forbid_status      — no returned row may have a status in `statuses`
+#   require_status       — every returned row's status must be in `statuses`
+#   forbid_status        — no returned row may have a status in `statuses`
 #   require_field_equals — every returned row's `field` must equal `value`
-#   forbid_id_prefix   — no returned id may start with any of `prefixes`
+#   require_field_in     — every returned row's `field` must be in `values`
+#   forbid_field_in      — no returned row's `field` may be in `values`
+#   forbid_id_prefix     — no returned id/endpoint/node may start with any `prefixes`
+#   require_edge_confidence_in — every path edge's source_confidence must be in `values`
+#   forbid_edge_confidence_in  — no path edge's source_confidence may be in `values`
+#
+# Each guard is bound to the query's output shape: a status guard needs `status`
+# selected, a field guard needs its field selected, a relationship isolation guard
+# needs both endpoints (`subject`,`object`) selected, and edge-confidence guards
+# apply only to a `path` query — so a safety assertion can never silently no-op.
+#
+# A `required: true` question is GATING: the runner must be able to answer it and
+# it MUST assert a NON-EMPTY expected answer (an empty expect + universal
+# `require_*` guards would pass vacuously). Being required makes it a positive,
+# non-empty assertion the runner gates on — it does NOT by itself make its family
+# `covered`. COVERAGE is the subset of required questions a `covered` cell in
+# docs/coverage.md cites BECAUSE the retrieved resources are evidence-backed. A
+# required question may instead assert a status-awareness SAFETY property over
+# draft/planning resources (e.g. `local-visibility-outcome-metrics` proves the
+# three draft metrics stay draft) — that is gating but NOT coverage proof, and its
+# family is `deferred / trigger-gated`, never `covered`. A deliberately EMPTY
+# answer (an absence-style check) must be `required: false` (non-gating). An
+# explicit absence-query DSL remains a deliberate future extension, not something
+# an empty required expectation may smuggle in. Every filter/expected operand must
+# also be the right TYPE for its column (string columns reject bool/number
+# operands; a controlled predicate/entity_type/source_confidence/status/severity
+# token is validated against the same schema vocabulary the validator enforces).
 # ---------------------------------------------------------------------------
 description: >
   Deterministic competency questions for the live client ontologies. Each
@@ -96,6 +131,39 @@ questions:
       # Cross-client isolation: no JMD rule may leak into a Femme answer.
       - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
 
+  # Femme — relationship-independent BUSINESS identity + offering question. Proves
+  # the business-identity coverage cell with a source-backed competency: the brand
+  # identity (verified) and the public service package / offering (approved,
+  # owner-reviewed) are both evidence-backed recorded resources, so the coverage
+  # matrix can cite this instead of merely naming resources no question retrieves.
+  - id: femme-events.competency.business-identity-and-offering
+    client_id: femme-events
+    projection: femme-events.agent-context
+    question: >
+      What is Femme Events' core brand identity, and which public service package
+      (offering) does the client present?
+    rationale: >
+      Protects the strategist/website consumer job: identity and the named public
+      offering must be answered from evidence-backed brand/website resources, not
+      guessed. Both are recorded resources that carry source evidence in their
+      modules, so this is a source-backed business answer.
+    required: true
+    query:
+      op: entities
+      filters:
+        entity_id: [femme-events.brand.identity, femme-events.website.service-package]
+      select: [entity_id, entity_type, status, source_confidence]
+    expect:
+      rows:
+        - {entity_id: femme-events.brand.identity, entity_type: brand_object, status: active, source_confidence: verified}
+        - {entity_id: femme-events.website.service-package, entity_type: business_object, status: approved, source_confidence: owner_reviewed}
+    guards:
+      # These are recorded identity/offering facts, never draft guesswork.
+      - {type: require_field_in, field: status, values: [active, approved]}
+      - {type: require_field_in, field: source_confidence, values: [verified, owner_reviewed]}
+      # Cross-client isolation: no JMD resource may answer a Femme question.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
   # ---- JMD Menswear -------------------------------------------------------
   - id: jmd-menswear.competency.ecommerce-and-live-change-guardrails
     client_id: jmd-menswear
@@ -164,3 +232,262 @@ questions:
       # Isolation: the inventory workflow must not pull in brand voice or any
       # other client's resources.
       - {type: forbid_id_prefix, prefixes: [jmd-menswear.brand, femme-events]}
+
+  # ---- issue #41: relationship-backed + technical/data-flow + multi-hop -----
+
+  # Femme — relationship-backed BUSINESS question. Proves the Google Business
+  # Profile is grounded in an owner-reviewed business fact that in turn targets a
+  # service area (subject/predicate/object answer), and that both edges are
+  # recorded (owner_reviewed), not draft guesswork.
+  - id: femme-events.competency.gbp-grounded-in-owner-reviewed-fact
+    client_id: femme-events
+    projection: femme-events.local-seo
+    question: >
+      How is the Google Business Profile grounded — which owner-reviewed business
+      fact does it use, and what service area does that fact target?
+    rationale: >
+      Protects the local-visibility consumer job: public GBP work must trace to an
+      owner-reviewed business fact and its service area, not an unverified guess.
+      The relationship answer names that grounding chain and proves it is recorded.
+    required: true
+    query:
+      op: relationships
+      filters:
+        predicate: [uses, targets]
+        source_confidence: owner_reviewed
+      select: [subject, predicate, object, source_confidence]
+    expect:
+      rows:
+        - {subject: femme-events.visibility.google-business-profile, predicate: uses, object: femme-events.visibility.business-fact, source_confidence: owner_reviewed}
+        - {subject: femme-events.visibility.business-fact, predicate: targets, object: femme-events.visibility.service-area, source_confidence: owner_reviewed}
+    guards:
+      # Status/confidence: these grounding edges must be recorded, never draft.
+      - {type: require_field_in, field: source_confidence, values: [owner_reviewed, verified]}
+      # Cross-client isolation on both endpoints.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # Femme — TECHNICAL system/data-flow question (VERIFIED, source-backed). How does
+  # the website system's content/data flow: Sanity CMS content renders into the
+  # site, and the site targets the inquiry form. Both edges are verified and carry
+  # evidence in the website module, so this is a source-backed current data-flow
+  # answer (not a planned one).
+  - id: femme-events.competency.website-content-data-flow
+    client_id: femme-events
+    projection: femme-events.website-build
+    question: >
+      What are the verified content/data flows for the Femme website system —
+      where does CMS content render, and what does the site route inquiries to?
+    rationale: >
+      Protects the website-builder/reporting-consumer job: the real integration
+      surface (Sanity CMS → site, site → inquiry form) must be followed as recorded
+      architecture. Both edges are verified and source-backed in the website module,
+      so a consumer can rely on them as current data-flows rather than guesses.
+    required: true
+    query:
+      op: relationships
+      filters:
+        predicate: [renders_in, targets]
+        source_confidence: verified
+      select: [subject, predicate, object, source_confidence]
+    expect:
+      rows:
+        - {subject: femme-events.website.cms-content, predicate: renders_in, object: femme-events.website.site, source_confidence: verified}
+        - {subject: femme-events.website.site, predicate: targets, object: femme-events.website.inquiry-form, source_confidence: verified}
+    guards:
+      # This IS verified current architecture — every returned edge must be verified.
+      - {type: require_field_in, field: source_confidence, values: [verified]}
+      # Cross-client isolation on both endpoints.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # Femme — planning-only status-awareness demonstration (OPTIONAL, not source-
+  # backed). The three metric→GBP `measures` edges are DRAFT with no evidence: they
+  # define WHAT will be measured, not a shipped instrumentation flow. This question
+  # is deliberately optional and exists only to prove those planned edges stay draft
+  # (a draft data-flow can never masquerade as verified live instrumentation); it is
+  # NOT Femme's source-backed technical answer (see website-content-data-flow above)
+  # and does not claim evidence the draft edges do not carry.
+  - id: femme-events.competency.outcome-metrics-measure-gbp-planning-only
+    client_id: femme-events
+    projection: femme-events.local-seo
+    question: >
+      Are the planned metric→Google-Business-Profile measurement edges still
+      draft (planning-only), so no planned data-flow poses as verified instrumentation?
+    rationale: >
+      Protects the reporting-consumer job at the planning boundary: these
+      measurement edges are proposed outcome instrumentation, not shipped data-flows.
+      They must stay draft until a real read-only snapshot promotes them, so this
+      optional status-awareness check proves they remain planning-only.
+    required: false
+    query:
+      op: relationships
+      filters:
+        predicate: measures
+      select: [subject, predicate, object, source_confidence]
+    expect:
+      rows:
+        - {subject: femme-events.visibility.metric.gbp-calls, predicate: measures, object: femme-events.visibility.google-business-profile, source_confidence: draft}
+        - {subject: femme-events.visibility.metric.gbp-direction-requests, predicate: measures, object: femme-events.visibility.google-business-profile, source_confidence: draft}
+        - {subject: femme-events.visibility.metric.website-clicks, predicate: measures, object: femme-events.visibility.google-business-profile, source_confidence: draft}
+    guards:
+      # Status-awareness: every measurement flow stays draft (planning-only). A
+      # promotion to verified must flip this question, never pass silently.
+      - {type: require_field_in, field: source_confidence, values: [draft]}
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # Femme — bounded MULTI-HOP data-flow path. CMS content renders into the site,
+  # which contains the public service package: a verified two-hop content flow.
+  - id: femme-events.competency.cms-content-renders-to-service-package-path
+    client_id: femme-events
+    projection: femme-events.website-build
+    question: >
+      Along the verified website content flow, how does CMS content reach the
+      public service package (which node does it render into, and what does that
+      node contain)?
+    rationale: >
+      Protects the website-builder job: the builder must follow the real content
+      pipeline (CMS → site → service package) rather than guess where copy lands.
+      The bounded path proves the two-hop flow and that every edge is verified.
+    required: true
+    query:
+      op: path
+      start: {id: femme-events.website.cms-content}
+      end: {entity_type: business_object}
+      predicates: [renders_in, contains]
+      min_hops: 2
+      max_hops: 2
+    expect:
+      paths:
+        - chain: [femme-events.website.cms-content, renders_in, femme-events.website.site, contains, femme-events.website.service-package]
+          confidences: [verified, verified]
+    guards:
+      # This IS verified current architecture — every edge must be verified.
+      - {type: require_edge_confidence_in, values: [verified]}
+      # Cross-client isolation across every traversed node.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # JMD — relationship-backed BUSINESS/operating question. The approval boundary
+  # governs the public showroom website: a verified governance edge.
+  - id: jmd-menswear.competency.approval-boundary-governs-site
+    client_id: jmd-menswear
+    projection: jmd-menswear.website-build
+    question: >
+      Which operating boundary governs the public showroom website, and is that
+      governance relationship verified?
+    rationale: >
+      Protects the website-builder job: no live/public change happens outside the
+      approval boundary. The relationship answer names the boundary that governs
+      the site and proves the constraint is verified, not a draft proposal.
+    required: true
+    query:
+      op: relationships
+      filters:
+        predicate: governs
+      select: [subject, predicate, object, source_confidence]
+    expect:
+      rows:
+        - {subject: jmd-menswear.operations.approval-boundary, predicate: governs, object: jmd-menswear.website.site, source_confidence: verified}
+    guards:
+      - {type: require_field_in, field: source_confidence, values: [verified]}
+      # Isolation: no inventory endpoint and no other client may appear.
+      - {type: forbid_id_prefix, prefixes: [femme-events, jmd-menswear.inventory]}
+
+  # JMD — PEOPLE/ROLES question. Which durable owner responsibilities are recorded,
+  # and is that role split verified? Proves the people/roles coverage family with a
+  # source-backed competency answer (owner-roles is verified + evidenced).
+  - id: jmd-menswear.competency.owner-role-responsibility-split
+    client_id: jmd-menswear
+    projection: jmd-menswear.website-build
+    question: >
+      Which durable owner responsibilities are recorded for JMD (who leads
+      relationships/brand vs. inventory/purchasing/sales), and is that verified?
+    rationale: >
+      Protects the operations/handoff consumer job: an agent or reviewer must route
+      a decision to the right owner. The recorded, verified owner-roles resource
+      names the Lucky/Danny responsibility split so responsibility boundaries are an
+      evidence-backed answer, not tribal knowledge.
+    required: true
+    query:
+      op: entities
+      filters:
+        entity_id: jmd-menswear.operations.owner-roles
+      select: [entity_id, status, source_confidence, fields.Lucky, fields.Danny]
+    expect:
+      rows:
+        - entity_id: jmd-menswear.operations.owner-roles
+          status: active
+          source_confidence: verified
+          Lucky: "relationships and brand personality"
+          Danny: "inventory, purchasing, day-to-day sales"
+    guards:
+      # Only the recorded (active) role fact answers this — a draft proposal cannot.
+      - {type: require_status, statuses: [active]}
+      # This role split must be verified, not inferred/draft.
+      - {type: require_field_in, field: source_confidence, values: [verified]}
+      # Isolation: no other client's resource may appear.
+      - {type: forbid_id_prefix, prefixes: [femme-events]}
+
+  # JMD — BUSINESS identity + differentiator question. Proves the business-identity
+  # coverage cell with a source-backed competency: the brand identity and the durable
+  # one-of-a-kind differentiator are both verified, evidence-backed resources, so the
+  # matrix cites this instead of naming brand resources no question retrieves.
+  - id: jmd-menswear.competency.brand-identity-and-differentiator
+    client_id: jmd-menswear
+    projection: jmd-menswear.website-build
+    question: >
+      What is JMD Menswear's brand identity, and what is its durable one-of-a-kind
+      differentiator?
+    rationale: >
+      Protects the website/strategist consumer job: identity and the durable
+      differentiator must be answered from verified, evidence-backed brand resources
+      rather than inferred, so copy and positioning stay on-brand.
+    required: true
+    query:
+      op: entities
+      filters:
+        entity_id: [jmd-menswear.brand.identity, jmd-menswear.brand.differentiator]
+      select: [entity_id, entity_type, status, source_confidence]
+    expect:
+      rows:
+        - {entity_id: jmd-menswear.brand.identity, entity_type: brand_object, status: active, source_confidence: verified}
+        - {entity_id: jmd-menswear.brand.differentiator, entity_type: brand_object, status: active, source_confidence: verified}
+    guards:
+      # Only the recorded (active) brand facts answer this — a draft cannot.
+      - {type: require_status, statuses: [active]}
+      # This identity/differentiator must be verified, not inferred/draft.
+      - {type: require_field_in, field: source_confidence, values: [verified]}
+      # Isolation: no other client and no inventory resource may appear.
+      - {type: forbid_id_prefix, prefixes: [femme-events, jmd-menswear.inventory]}
+
+  # JMD — TECHNICAL system/data-flow AND the required bounded MULTI-HOP question.
+  # The Drive→Sanity→showroom image pipeline is a three-hop data flow that is
+  # still draft (planning-only): Drive folder contains an image, which
+  # creates/updates a Sanity asset, which renders in a showroom item.
+  - id: jmd-menswear.competency.inventory-image-pipeline-path
+    client_id: jmd-menswear
+    projection: jmd-menswear.inventory-workflow
+    question: >
+      In the inventory-image pipeline, how does a Drive folder image become a
+      published showroom item, and is that multi-hop data-flow still planning-only?
+    rationale: >
+      Protects the automation-consumer job: the Drive→Sanity→showroom pipeline is a
+      proposed MVP flow, not shipped architecture. The bounded three-hop path proves
+      the data flow AND that every edge is draft, so it cannot be treated as a
+      verified live integration or bypass the human-approval boundary.
+    required: true
+    query:
+      op: path
+      start: {id: jmd-menswear.inventory.drive-folder}
+      end: {entity_type: content_record}
+      predicates: [contains, creates_or_updates, renders_in]
+      min_hops: 3
+      max_hops: 3
+    expect:
+      paths:
+        - chain: [jmd-menswear.inventory.drive-folder, contains, jmd-menswear.inventory.image, creates_or_updates, jmd-menswear.inventory.sanity-asset, renders_in, jmd-menswear.inventory.showroom-item]
+          confidences: [draft, draft, draft]
+    guards:
+      # Status-awareness: the whole pipeline stays draft. Promoting any edge to
+      # verified must flip this question — a draft plan cannot pose as live.
+      - {type: require_edge_confidence_in, values: [draft]}
+      # Isolation: brand voice and every other client stay out of the traversal.
+      - {type: forbid_id_prefix, prefixes: [femme-events, jmd-menswear.brand]}
