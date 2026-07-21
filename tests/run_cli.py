@@ -351,11 +351,60 @@ def test_evidence_pointers_preserved(ds_yaml: svc.Dataset, ds_sqlite: svc.Datase
 # --------------------------------------------------------------------------- #
 # 6. Packaging entry points
 # --------------------------------------------------------------------------- #
-def test_entry_points() -> None:
-    import tomllib
+def _read_pyproject_project() -> dict[str, Any]:
+    """Return the ``[project]`` fields this test asserts on (``scripts`` +
+    ``dependencies``), staying stdlib-only across the declared Python floor.
 
-    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    scripts = data["project"]["scripts"]
+    ``tomllib`` only exists on Python 3.11+, but ``pyproject.toml`` declares
+    ``requires-python = ">=3.10"`` and the runtime/test suite is meant to stay
+    dependency-light (no ``tomli`` backport). So we use ``tomllib`` when present
+    and otherwise parse the narrow subset we check with a tiny table reader —
+    keeping the packaging regression runnable on the intended interpreter floor.
+    """
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        return _parse_pyproject_subset(text)
+    data = tomllib.loads(text)
+    project = data["project"]
+    return {"scripts": project.get("scripts", {}), "dependencies": project.get("dependencies")}
+
+
+def _parse_pyproject_subset(text: str) -> dict[str, Any]:
+    """Minimal TOML reader for ``[project.scripts]`` string entries and
+    ``[project]``'s inline ``dependencies`` list — the only fields asserted
+    here. Not a general TOML parser; deliberately narrow and stdlib-only."""
+    scripts: dict[str, str] = {}
+    dependencies: Optional[list[str]] = None
+    section: Optional[str] = None
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+            continue
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip().strip('"'), val.strip()
+        if section == "project.scripts":
+            scripts[key] = val.strip('"')
+        elif section == "project" and key == "dependencies":
+            if val.startswith("[") and val.endswith("]"):
+                inner = val[1:-1].strip()
+                dependencies = (
+                    [x.strip().strip('"').strip("'") for x in inner.split(",") if x.strip()]
+                    if inner
+                    else []
+                )
+    return {"scripts": scripts, "dependencies": dependencies}
+
+
+def test_entry_points() -> None:
+    project = _read_pyproject_project()
+    scripts = project["scripts"]
     check(scripts.get("ontology") == "ontology_cli:main", "ontology entry point mismatch")
     check(
         scripts.get("ontology-mcp") == "ontology_cli:mcp_entrypoint",
@@ -367,7 +416,7 @@ def test_entry_points() -> None:
         code = cli.mcp_entrypoint([])
     check(code == 2, f"ontology-mcp placeholder must fail closed with exit 2, got {code}")
     # The core must add no third-party dependencies.
-    check(data["project"]["dependencies"] == [], "core must declare zero runtime dependencies")
+    check(project["dependencies"] == [], "core must declare zero runtime dependencies")
 
 
 # --------------------------------------------------------------------------- #
