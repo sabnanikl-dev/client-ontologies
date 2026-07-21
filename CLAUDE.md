@@ -60,11 +60,17 @@ scope). Every controlled operand a question names — a relationship/path
 `predicate`, an entity `entity_type`, a `source_confidence`, a `status`, a rule
 `severity` — is validated against the SAME vocabulary the schema enforces (loaded
 from `schemas/*.schema.json`, with the schema's bounded `x_` predicate escape);
-every filter/expected/field-guard operand is also type-checked per column (a
-bool/number against a string column like `subject` is rejected, and a
+every filter/expected/field-guard operand is also container- and type-checked per
+column: a field guard's operand container matches its operator's cardinality
+(`require_field_equals` takes exactly one scalar — a list/mapping/null is rejected;
+`require_field_in`/`forbid_field_in` take a **non-empty list of scalars**, not
+hard-coded strings, so a boolean membership operand is expressible), and then every
+scalar is type-checked against the selected column (a bool/number against a string
+column like `subject` is rejected, and a
 `require_field_equals`/`require_field_in`/`forbid_field_in` operand on the boolean
-`public_facing` column must be a real `true`/`false`, not a `0`/`1` that would pass
-loosely through Python's `False == 0`), not silently unmatched; the
+`public_facing` column must be a real `true`/`false` — a `0`/`1` or a string is
+rejected up front rather than passing loosely through Python's `False == 0`), not
+silently unmatched; the
 `expect` envelope is closed; and each expected path chain is checked against its
 query's hop bounds / allowed predicates / endpoint constraints, rejects a
 repeated-node (cyclic) chain the simple-path traversal could never return, and —

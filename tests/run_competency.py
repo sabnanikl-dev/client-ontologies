@@ -134,18 +134,47 @@ STATUS_ROW_GUARDS = {"require_status", "forbid_status"}
 
 # Per-guard operand contract. Each required operand carries a shape check so a
 # misspelled operand (e.g. ``prefix`` for ``prefixes``) becomes a loud registry
-# error rather than a silent no-op. ``value`` may be any type, so it is
-# presence-only.
+# error rather than a silent no-op.
+#
+# The field guards' operand CONTAINER matches their operator's cardinality (Codex
+# Reviewer A / B / Integration Auditor, final surgical-hotfix reviews):
+#   * ``require_field_equals`` compares a row column against ONE value, so its
+#     ``value`` must be exactly one scalar — a list (empty/singleton/multi), a
+#     mapping, or ``null`` is a malformed definition, not a scalar operand. (An
+#     empty list previously ran zero element checks; a singleton list slipped
+#     through as if it were the scalar.)
+#   * ``require_field_in`` / ``forbid_field_in`` test membership, so their
+#     ``values`` must be a NON-EMPTY list of scalars — NOT hard-coded strings.
+#     Hard-coding ``nonempty_str_list`` here rejected the only correctly typed
+#     operand for the boolean ``public_facing`` column (``values: [false]``)
+#     before the column-type check could accept it. The per-scalar column TYPE
+#     and controlled vocabulary are enforced afterwards by
+#     ``_check_guard_operand_types`` / ``_check_guard_vocab`` (a real ``true``/
+#     ``false`` for ``public_facing``; a string for a string column; ints ``0``/
+#     ``1`` and strings are NOT booleans).
+# The confidence/status/prefix operands remain plain non-empty string lists.
 GUARD_REQUIRED = {
     "require_status": {"statuses": "nonempty_str_list"},
     "forbid_status": {"statuses": "nonempty_str_list"},
-    "require_field_equals": {"field": "nonempty_str", "value": "present"},
+    "require_field_equals": {"field": "nonempty_str", "value": "scalar"},
     "forbid_id_prefix": {"prefixes": "nonempty_str_list"},
-    "require_field_in": {"field": "nonempty_str", "values": "nonempty_str_list"},
-    "forbid_field_in": {"field": "nonempty_str", "values": "nonempty_str_list"},
+    "require_field_in": {"field": "nonempty_str", "values": "nonempty_scalar_list"},
+    "forbid_field_in": {"field": "nonempty_str", "values": "nonempty_scalar_list"},
     "require_edge_confidence_in": {"values": "nonempty_str_list"},
     "forbid_edge_confidence_in": {"values": "nonempty_str_list"},
 }
+
+# JSON scalar operand types (what a single guard/filter value may be). A ``list``
+# or ``mapping`` is a container, not a scalar; ``None`` is not an operand scalar
+# (no ontology column stores null, and equality against null would be a malformed
+# definition). ``bool`` is a scalar (and, being an ``int`` subclass, is already
+# covered by ``int`` — listed explicitly for intent).
+_SCALAR_OPERAND_TYPES = (str, bool, int, float)
+
+
+def _is_scalar_operand(value: Any) -> bool:
+    """True iff ``value`` is a JSON scalar (not a list/mapping/None)."""
+    return isinstance(value, _SCALAR_OPERAND_TYPES)
 
 
 class QuestionError(Exception):
@@ -339,7 +368,16 @@ _OP_ID_OUTPUT = {
 
 
 def _check_operand(source: str, qid: Any, guard: dict[str, Any], key: str, kind: str) -> None:
-    """Enforce a guard operand's presence and shape (empty/typo operands fail)."""
+    """Enforce a guard operand's presence and CONTAINER shape (empty/typo operands fail).
+
+    This is the operator-cardinality gate that runs BEFORE the per-scalar column
+    type/vocabulary checks. It fixes the operand-envelope class the three
+    final-hotfix reviewers reproduced: ``scalar`` rejects a list/mapping/null where
+    the operator compares one value (so an empty/singleton/multi list can never
+    stand in for a scalar), and ``nonempty_scalar_list`` accepts a non-empty list of
+    scalars of ANY type (so a boolean membership operand reaches the column-type
+    check instead of being rejected as a non-string list first).
+    """
     if key not in guard:
         _q_err(source, qid, f"guard {guard.get('type')!r} missing required operand {key!r}")
     if kind == "present":
@@ -348,6 +386,14 @@ def _check_operand(source: str, qid: Any, guard: dict[str, Any], key: str, kind:
     if kind == "nonempty_str_list":
         if not isinstance(val, list) or not val or not all(isinstance(x, str) for x in val):
             _q_err(source, qid, f"guard {guard.get('type')!r} operand {key!r} must be a non-empty list of strings")
+    elif kind == "nonempty_scalar_list":
+        if not isinstance(val, list) or not val or not all(_is_scalar_operand(x) for x in val):
+            _q_err(source, qid, f"guard {guard.get('type')!r} operand {key!r} must be a non-empty list of scalar values")
+    elif kind == "scalar":
+        if not _is_scalar_operand(val):
+            _q_err(source, qid,
+                   f"guard {guard.get('type')!r} operand {key!r} must be a single scalar value, "
+                   f"got {type(val).__name__}")
     elif kind == "nonempty_str":
         if not isinstance(val, str) or not val:
             _q_err(source, qid, f"guard {guard.get('type')!r} operand {key!r} must be a non-empty string")
@@ -2334,6 +2380,19 @@ def run_reporting_seam_probes(tmpdir: Path) -> dict[str, Any]:
     record("guard-require-field-in-bool-matches-true-row",
            guard_pass(true_rows, {"type": "require_field_in", "field": "public_facing", "values": [True]}),
            None)
+    # forbid_field_in evaluation is the inverse and equally type-sensitive: a real
+    # bool operand forbids the matching row, an int operand does NOT loosely forbid
+    # it (final operator-envelope correction — both membership guards evaluate
+    # JSON/type-sensitively, matching their now-accepted boolean operands).
+    record("guard-forbid-field-in-bool-forbids-true-row",
+           not guard_pass(true_rows, {"type": "forbid_field_in", "field": "public_facing", "values": [True]}),
+           None)
+    record("guard-forbid-field-in-bool-allows-false-row",
+           guard_pass(false_rows, {"type": "forbid_field_in", "field": "public_facing", "values": [True]}),
+           None)
+    record("guard-forbid-field-in-int-one-not-loose-true",
+           guard_pass(true_rows, {"type": "forbid_field_in", "field": "public_facing", "values": [1]}),
+           None)
     # _json_scalar_eq unit controls: false != 0, true != 1, bool == bool.
     record("json-scalar-eq-false-ne-zero", _json_scalar_eq(False, 0) is False, None)
     record("json-scalar-eq-true-ne-one", _json_scalar_eq(True, 1) is False, None)
@@ -2453,12 +2512,13 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
                guards=[{"type": "forbid_id_prefix", "prefixes": ["other"]}])),
          "requires the id column"),
         # Reviewer A / Auditor exact repro: require_field_equals on a field that is
-        # not selected (misspelled 'statsu', value: null) is a dict.get()-None
-        # no-op → reject.
+        # not selected (misspelled 'statsu') is a dict.get()-None no-op → reject.
+        # (The operand is a valid scalar so this probe isolates the applicability
+        # gate, not the operand-envelope gate exercised separately below.)
         ("require-field-not-selected",
          doc(q(query={"op": "entities", "select": ["entity_id", "status"]},
                expect={"rows": [{"entity_id": "c.x", "status": "draft"}]},
-               guards=[{"type": "require_field_equals", "field": "statsu", "value": None}])),
+               guards=[{"type": "require_field_equals", "field": "statsu", "value": "draft"}])),
          "requires its field 'statsu'"),
         # Auditor exact repro: a non-scalar filter operand (`status: {typo: draft}`)
         # can never match a column value and would silently drop the filter → reject.
@@ -2796,6 +2856,128 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
                expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
                guards=[{"type": "require_field_equals", "field": "public_facing", "value": False}])),
          None),
+        # ---- issue #41 final operator-envelope correction ----------------------
+        # Codex Reviewer A / B / Integration Auditor (final surgical-hotfix reviews)
+        # reproduced the complete operand-ENVELOPE class through validate_questions:
+        # (1) boolean membership operands were impossible because
+        # require_field_in/forbid_field_in hard-coded a string list, and (2)
+        # require_field_equals accepted a list container on a scalar column. The
+        # probes below lock the FULL operator × container × type matrix end to end
+        # (registry validation), not only the previously failing examples, and cover
+        # valid boolean membership for BOTH membership guards plus valid string
+        # membership — the controls the earlier 6-control set never exercised.
+        #
+        # -- Blocker 1 (all three reviewers): valid boolean membership must be
+        #    ACCEPTED for require_field_in AND forbid_field_in on ``public_facing``. --
+        ("membership-require-field-in-public-facing-bool-values-ok",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_in", "field": "public_facing", "values": [False]}])),
+         None),
+        ("membership-forbid-field-in-public-facing-bool-values-ok",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "forbid_field_in", "field": "public_facing", "values": [True]}])),
+         None),
+        ("membership-require-field-in-public-facing-multi-bool-ok",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_in", "field": "public_facing", "values": [True, False]}])),
+         None),
+        # Valid STRING membership on a plain string column must also be accepted.
+        ("membership-require-field-in-string-column-values-ok",
+         doc(q(query={"op": "entities", "select": ["entity_id", "label"]},
+               expect={"rows": [{"entity_id": "c.x", "label": "L"}]},
+               guards=[{"type": "require_field_in", "field": "label", "values": ["L", "M"]}])),
+         None),
+        # -- Blocker 2 (Reviewer A + Auditor): require_field_equals.value must be
+        #    exactly one scalar — a list (empty/singleton/multi), a mapping, or null
+        #    is a malformed definition, not a scalar operand. --
+        ("equality-value-empty-list-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_equals", "field": "public_facing", "value": []}])),
+         "must be a single scalar value"),
+        ("equality-value-singleton-list-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_equals", "field": "public_facing", "value": [False]}])),
+         "must be a single scalar value"),
+        ("equality-value-multi-list-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_equals", "field": "public_facing", "value": [False, True]}])),
+         "must be a single scalar value"),
+        ("equality-value-mapping-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_equals", "field": "public_facing", "value": {}}])),
+         "must be a single scalar value"),
+        ("equality-value-null-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_equals", "field": "public_facing", "value": None}])),
+         "must be a single scalar value"),
+        # Same scalar-container rule on a plain STRING column (empty + singleton list).
+        ("equality-value-string-column-empty-list-rejected",
+         doc(q(query={"op": "entities", "select": ["entity_id", "label"]},
+               expect={"rows": [{"entity_id": "c.x", "label": "L"}]},
+               guards=[{"type": "require_field_equals", "field": "label", "value": []}])),
+         "must be a single scalar value"),
+        ("equality-value-string-column-singleton-list-rejected",
+         doc(q(query={"op": "entities", "select": ["entity_id", "label"]},
+               expect={"rows": [{"entity_id": "c.x", "label": "L"}]},
+               guards=[{"type": "require_field_equals", "field": "label", "value": ["x"]}])),
+         "must be a single scalar value"),
+        # -- Membership container/cardinality: values must be a NON-EMPTY list of
+        #    scalars (an empty list, a bare non-list, or a nested-list element are
+        #    all malformed containers, rejected before the column-type check). --
+        ("membership-empty-list-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_in", "field": "public_facing", "values": []}])),
+         "must be a non-empty list of scalar values"),
+        ("membership-bare-string-not-list-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_in", "field": "public_facing", "values": "false"}])),
+         "must be a non-empty list of scalar values"),
+        ("membership-nested-list-element-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_in", "field": "public_facing", "values": [[False]]}])),
+         "must be a non-empty list of scalar values"),
+        # -- Membership per-scalar column TYPE: after the container passes, ints
+        #    0/1 and strings are NOT booleans for ``public_facing``; ints are not
+        #    strings for a string column. (forbid_field_in shares the same gate.) --
+        ("membership-require-field-in-public-facing-int-values-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_in", "field": "public_facing", "values": [0]}])),
+         "must be true/false"),
+        ("membership-forbid-field-in-public-facing-int-values-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "forbid_field_in", "field": "public_facing", "values": [1]}])),
+         "must be true/false"),
+        ("membership-require-field-in-string-column-int-values-rejected",
+         doc(q(query={"op": "entities", "select": ["entity_id", "label"]},
+               expect={"rows": [{"entity_id": "c.x", "label": "L"}]},
+               guards=[{"type": "require_field_in", "field": "label", "values": [7]}])),
+         "must be a string"),
     ]
 
 
