@@ -62,3 +62,63 @@ jobs:
       # fail this step. See scripts/check_evidence.py for the exit contract.
       - name: Evidence health (advisory for non-resolvable paths)
         run: python3 scripts/check_evidence.py --strict
+
+  # Independent lane (issue #40): prove the PACKAGED read-only runtime installs
+  # and works at the declared `requires-python = ">=3.10"` floor through its real
+  # installed console entry points — not source-tree substitutes. It builds the
+  # package into a clean, dependency-free virtualenv, exercises the `ontology` and
+  # `ontology-mcp` scripts, and drives the documented Ruby-free consumer contract
+  # (a pinned SQLite snapshot enforced from a foreign cwd with no `ruby` on PATH).
+  installed-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin the DECLARED floor (3.10) so the packaged runtime and its Python-floor
+      # TOML fallback stay continuously covered, independent of the 3.12 job above.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      # Ruby is needed only to BUILD the SQLite snapshot (export shells to `ruby`).
+      # The installed consumer smoke then runs Ruby-free by restricting PATH.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      # Clean virtualenv install straight from the checkout, with NO runtime
+      # dependencies (the core + CLI are stdlib-only). A build/entry-point
+      # regression fails here, before any runtime assertion.
+      - name: Install package into a clean virtualenv (no runtime deps)
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/venv/bin/python" -m pip install .
+          echo "installed distribution has no runtime deps:"
+          "$RUNNER_TEMP/venv/bin/python" -m pip show client-ontologies | grep -E '^(Name|Version|Requires):'
+
+      - name: Confirm installed console entry points resolve
+        run: |
+          set -euo pipefail
+          test -x "$RUNNER_TEMP/venv/bin/ontology"
+          test -x "$RUNNER_TEMP/venv/bin/ontology-mcp"
+          echo "ontology + ontology-mcp resolve from the installation"
+
+      # Build a genuine SQLite snapshot WHILE Ruby is still on PATH; the smoke
+      # helper reads it Ruby-free afterward. Written under RUNNER_TEMP, never the
+      # repo (nothing to commit).
+      - name: Build a temporary SQLite snapshot (Ruby available)
+        run: python3 scripts/export_sqlite.py --root . --output "$RUNNER_TEMP/ontology.sqlite"
+
+      # Ruby-free installed-consumer contract: from a foreign temp cwd with a PATH
+      # restricted to the venv scripts dir (no `ruby`), the installed `ontology`
+      # sqlite check-copy must flag the JMD blocking rule, exit 1, and stamp
+      # read_mode=sqlite / repo_commit=null; `ontology-mcp` must fail closed
+      # (structured exit 2). See tests/installed_smoke.py for the exact assertions.
+      - name: Installed-console runtime smoke (Ruby-free SQLite enforcement)
+        run: python3 tests/installed_smoke.py --bindir "$RUNNER_TEMP/venv/bin" --sqlite-path "$RUNNER_TEMP/ontology.sqlite"
+
+      # Run the full 27-check runtime regression suite on the 3.10 floor so the
+      # declared-floor TOML fallback and every runtime contract stay covered.
+      - name: Run runtime CLI/service tests under Python 3.10
+        run: python3 tests/run_cli.py
