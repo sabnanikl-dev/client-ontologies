@@ -377,6 +377,7 @@ def _validate_guard(source: str, qid: Any, guard: Any, op: str, output_keys: Opt
     for key, kind in required.items():
         _check_operand(source, qid, guard, key, kind)
     _check_guard_vocab(source, qid, guard, gtype)
+    _check_guard_operand_types(source, qid, guard, gtype, op)
     _check_guard_applicability(source, qid, guard, gtype, op, output_keys)
 
 
@@ -400,6 +401,34 @@ def _check_guard_vocab(source: str, qid: Any, guard: dict[str, Any], gtype: str)
         _check_vocab_values(source, qid, f"guard {gtype!r} value", guard.get("values"), guard.get("field"))
     elif gtype == "require_field_equals":
         _check_vocab_values(source, qid, f"guard {gtype!r} value", guard.get("value"), guard.get("field"))
+
+
+def _check_guard_operand_types(source: str, qid: Any, guard: dict[str, Any], gtype: str, op: str) -> None:
+    """Type-check a FIELD guard's operand(s) against the selected column's type.
+
+    ``require_field_equals`` / ``require_field_in`` / ``forbid_field_in`` read a
+    real row column and then compare per row, so their operand must match that
+    column's DECLARED type exactly — the same guarantee ``_check_column_operand_types``
+    already gives filter and expected-row operands. ``_check_guard_vocab`` above only
+    covers *controlled-vocabulary* columns (status/confidence/…​), which excludes the
+    boolean ``public_facing`` and the plain string columns, so a malformed operand
+    slipped straight to evaluation. In particular ``public_facing`` is a boolean
+    column: an integer operand (``value: 0``) previously validated and then passed
+    vacuously through Python's ``False == 0`` at evaluation time, letting a
+    malformed guard hold on a required question (Codex Reviewer A, exception-head
+    final review). Requiring real booleans here — and rejecting a bool/number
+    against a string column — turns that into a loud usage error before any answer
+    is trusted. Only applies when the field names a real op column; a
+    ``fields.<name>`` raw_json extraction has no declared type and is left to the
+    closed vocab/shape checks.
+    """
+    if gtype not in ("require_field_equals", "require_field_in", "forbid_field_in"):
+        return
+    field = guard.get("field")
+    if op not in OP_COLUMNS or field not in OP_COLUMNS[op]:
+        return
+    operand = guard.get("value") if gtype == "require_field_equals" else guard.get("values")
+    _check_column_operand_types(source, qid, f"guard {gtype!r} operand", operand, field)
 
 
 def _check_guard_applicability(
@@ -1088,6 +1117,19 @@ def _row_key(row: dict[str, Any]) -> str:
     return json.dumps(row, sort_keys=True, ensure_ascii=False)
 
 
+def _json_scalar_eq(a: Any, b: Any) -> bool:
+    """Type-sensitive scalar equality (``False`` != ``0``, ``True`` != ``1``).
+
+    Field-guard operands are compared by canonical JSON so a normalized boolean
+    row value never loosely equals an integer/string operand — the same JSON/type
+    sensitivity ``_compare_rows`` uses for expected-vs-actual rows (Codex Reviewer
+    A). This is belt-and-suspenders behind the registry operand-type check: even a
+    correctly-typed guard is evaluated without Python's ``bool``/``int`` coercion,
+    so a boolean answer can never satisfy an integer operand at evaluation time.
+    """
+    return json.dumps(a, sort_keys=True, ensure_ascii=False) == json.dumps(b, sort_keys=True, ensure_ascii=False)
+
+
 def _compare_rows(expected: list[dict[str, Any]], actual: list[dict[str, Any]]) -> list[str]:
     """Return human diagnostics for an expected-vs-actual row-set mismatch.
 
@@ -1185,18 +1227,25 @@ def _check_guards(op: str, actual: Any, guards: list[dict[str, Any]]) -> list[st
             if bad:
                 failures.append(f"guard forbid_status: found forbidden status(es) {bad}")
         elif gtype == "require_field_equals":
+            # Type-sensitive comparison: a normalized boolean row value must not
+            # loosely satisfy an int/str operand via Python's ``False == 0`` (Codex
+            # Reviewer A). The operand is already column-type checked at load time.
             field, value = guard.get("field"), guard.get("value")
-            bad = sorted({str(r.get(field)) for r in rows if r.get(field) != value})
+            bad = sorted({str(r.get(field)) for r in rows if not _json_scalar_eq(r.get(field), value)})
             if bad:
                 failures.append(f"guard require_field_equals: {field!r} must equal {value!r}, saw {bad}")
         elif gtype == "require_field_in":
-            field, values = guard.get("field"), set(guard.get("values") or [])
-            bad = sorted({str(r.get(field)) for r in rows if r.get(field) not in values})
+            field = guard.get("field")
+            values = guard.get("values") or []
+            bad = sorted({str(r.get(field)) for r in rows
+                          if not any(_json_scalar_eq(r.get(field), v) for v in values)})
             if bad:
                 failures.append(f"guard require_field_in: {field!r} must be in {sorted(values)}, saw {bad}")
         elif gtype == "forbid_field_in":
-            field, values = guard.get("field"), set(guard.get("values") or [])
-            bad = sorted({str(r.get(field)) for r in rows if r.get(field) in values})
+            field = guard.get("field")
+            values = guard.get("values") or []
+            bad = sorted({str(r.get(field)) for r in rows
+                          if any(_json_scalar_eq(r.get(field), v) for v in values)})
             if bad:
                 failures.append(f"guard forbid_field_in: {field!r} must not be in {sorted(values)}, saw {bad}")
         elif gtype == "require_edge_confidence_in":
@@ -2249,6 +2298,48 @@ def run_reporting_seam_probes(tmpdir: Path) -> dict[str, Any]:
     ran_line = _summary_checks_line({"passed": True, "cases": [{"isolated": True}]})
     record("ran-summary-claims-drift-hold", ran_line.startswith("drift isolation +"), ran_line)
 
+    # Guard-EVALUATION type sensitivity (Codex Reviewer A, exception-head final
+    # review): the row-comparison cases above prove ``_compare_rows`` is
+    # type-sensitive, but the FIELD-GUARD evaluation path is a separate seam that
+    # was untested. Prove a normalized boolean row never loosely satisfies an
+    # int/str operand, while a genuine boolean guard still holds.
+    false_rows = [{"entity_id": "c.e", "public_facing": False}]
+    true_rows = [{"entity_id": "c.e", "public_facing": True}]
+
+    def guard_pass(rows, guard):
+        return _check_guards("entities", rows, [guard]) == []
+
+    # Valid boolean controls: a real bool operand matches / mismatches correctly.
+    record("guard-require-field-equals-false-matches-false-row",
+           guard_pass(false_rows, {"type": "require_field_equals", "field": "public_facing", "value": False}),
+           None)
+    record("guard-require-field-equals-true-matches-true-row",
+           guard_pass(true_rows, {"type": "require_field_equals", "field": "public_facing", "value": True}),
+           None)
+    record("guard-require-field-equals-true-mismatches-false-row",
+           not guard_pass(false_rows, {"type": "require_field_equals", "field": "public_facing", "value": True}),
+           None)
+    # The exact false-pass class: int-0 must NOT loosely equal bool False, int-1
+    # must NOT loosely equal bool True — evaluation now reports the mismatch.
+    record("guard-require-field-equals-int-zero-not-loose-false",
+           not guard_pass(false_rows, {"type": "require_field_equals", "field": "public_facing", "value": 0}),
+           None)
+    record("guard-require-field-equals-int-one-not-loose-true",
+           not guard_pass(true_rows, {"type": "require_field_equals", "field": "public_facing", "value": 1}),
+           None)
+    # require_field_in is the same must-match class; forbid_field_in is its inverse.
+    record("guard-require-field-in-int-zero-not-loose-false",
+           not guard_pass(false_rows, {"type": "require_field_in", "field": "public_facing", "values": [0]}),
+           None)
+    record("guard-require-field-in-bool-matches-true-row",
+           guard_pass(true_rows, {"type": "require_field_in", "field": "public_facing", "values": [True]}),
+           None)
+    # _json_scalar_eq unit controls: false != 0, true != 1, bool == bool.
+    record("json-scalar-eq-false-ne-zero", _json_scalar_eq(False, 0) is False, None)
+    record("json-scalar-eq-true-ne-one", _json_scalar_eq(True, 1) is False, None)
+    record("json-scalar-eq-bool-matches",
+           _json_scalar_eq(False, False) and _json_scalar_eq(True, True), None)
+
     passed = all(c["ok"] for c in cases)
     return {"passed": passed, "cases": cases}
 
@@ -2269,8 +2360,10 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
     duplicate output keys, a wrong-typed expect payload, a missing guard operand,
     an expected-row key typo, a projection_resources question missing its
     resources, a status/field/id guard not bound to a selected output key
-    (silent no-op), a non-scalar filter operand, and a row-field guard on a
-    projection_resources answer.
+    (silent no-op), a non-scalar filter operand, a row-field guard on a
+    projection_resources answer, and a field guard whose operand type does not
+    match the selected column (an int/str on the boolean ``public_facing`` column,
+    an int on a plain string column).
     """
     _DROP = object()  # sentinel: a probe passes _DROP to remove a base field
 
@@ -2662,6 +2755,47 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
                expect={"paths": [{"chain": ["c.a", "contains", "c.b", "contains", "c.a"],
                                   "confidences": ["draft", "draft"]}]})),
          "repeats node"),
+        # ---- issue #41 exception-hotfix: field-guard operand types --------------
+        # Codex Reviewer A (exception-head final review) EXACT repro: a
+        # ``require_field_equals`` guard on the BOOLEAN column ``public_facing`` with
+        # an integer operand (``value: 0``) validated and then passed vacuously
+        # through Python's ``False == 0`` at evaluation. Guard operands must be
+        # column-type checked, so an int/str on a boolean column is a usage error.
+        ("field-guard-public-facing-int-zero-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_equals", "field": "public_facing", "value": 0}])),
+         "must be true/false"),
+        # The true/1 twin of the same class (``True == 1``).
+        ("field-guard-public-facing-int-one-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": True}]},
+               guards=[{"type": "require_field_equals", "field": "public_facing", "value": 1}])),
+         "must be true/false"),
+        # The adjacent in-guard path: ``forbid_field_in`` string operands on the
+        # boolean column would never equal a real bool row → vacuous "safe" pass.
+        ("forbid-field-in-public-facing-string-values-rejected",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "forbid_field_in", "field": "public_facing", "values": ["0"]}])),
+         "must be true/false"),
+        # The adjacent string-column path: an int operand on a plain (non-controlled)
+        # string column can never equal a stored string → reject by type.
+        ("field-guard-string-column-int-value-rejected",
+         doc(q(query={"op": "entities", "select": ["entity_id", "label"]},
+               expect={"rows": [{"entity_id": "c.x", "label": "L"}]},
+               guards=[{"type": "require_field_equals", "field": "label", "value": 7}])),
+         "must be a string"),
+        # Valid control — a real boolean operand on the boolean column is accepted.
+        ("field-guard-public-facing-bool-value-ok",
+         doc(q(query={"op": "entities", "filters": {"entity_type": "system_resource"},
+                      "select": ["entity_id", "public_facing"]},
+               expect={"rows": [{"entity_id": "c.x", "public_facing": False}]},
+               guards=[{"type": "require_field_equals", "field": "public_facing", "value": False}])),
+         None),
     ]
 
 

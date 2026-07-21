@@ -60,8 +60,11 @@ scope). Every controlled operand a question names — a relationship/path
 `predicate`, an entity `entity_type`, a `source_confidence`, a `status`, a rule
 `severity` — is validated against the SAME vocabulary the schema enforces (loaded
 from `schemas/*.schema.json`, with the schema's bounded `x_` predicate escape);
-every filter/expected operand is also type-checked per column (a bool/number
-against a string column like `subject` is rejected, not silently unmatched); the
+every filter/expected/field-guard operand is also type-checked per column (a
+bool/number against a string column like `subject` is rejected, and a
+`require_field_equals`/`require_field_in`/`forbid_field_in` operand on the boolean
+`public_facing` column must be a real `true`/`false`, not a `0`/`1` that would pass
+loosely through Python's `False == 0`), not silently unmatched; the
 `expect` envelope is closed; and each expected path chain is checked against its
 query's hop bounds / allowed predicates / endpoint constraints, rejects a
 repeated-node (cyclic) chain the simple-path traversal could never return, and —
@@ -96,12 +99,15 @@ relationship confidence, or a path-edge confidence — **newly** fails only the
 relevant question, measured against the clean baseline so a failing optional stays
 non-gating), **reporting-seam** (a synthetic fixture proves a `public_facing`
 boolean stored as SQLite `0/1` normalizes back to a real `bool` and comparison is
-JSON/type-sensitive so `false` ≠ `0`, and that `--no-drift` represents the drift
+JSON/type-sensitive so `false` ≠ `0`, both for row comparison and for
+field-guard evaluation — a boolean row never loosely satisfies an int/str guard
+operand — and that `--no-drift` represents the drift
 regression **explicitly as skipped** rather than silently "passed"), and
 **registry shape-validation** (a malformed question — including a
 non-string `id`/`client_id`/`projection`, a non-boolean `required`, a required
 question with an empty expected answer, a guard not bound to a selected output
-column, a non-scalar or wrong-typed filter operand, a typo'd
+column, a non-scalar or wrong-typed filter operand, a field-guard operand whose
+type does not match its column (an int/str on the boolean `public_facing`), a typo'd
 `predicate`/`entity_type`/`source_confidence`/`status`/`severity` token, a
 stray/unknown `expect` key, an expected chain that contradicts its query (a
 disallowed predicate, a bad hop count, a mismatched endpoint, or a repeated node),
