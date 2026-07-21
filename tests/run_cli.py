@@ -430,6 +430,95 @@ def test_error_sqlite_embedded_owner_drift(canonical_db: Path) -> None:
         check("error" in json.loads(err), "embedded owner drift must be structured")
 
 
+def test_error_sqlite_projection_includes_tampering(canonical_db: Path) -> None:
+    """Same-ID projection-content tampering (Codex Reviewer A, review 4741489241):
+    a genuine full export whose projection ``raw_json.includes`` is emptied while
+    the normalized ``includes_json`` column stays canonical. The service resolves
+    projection scope from the EMBEDDED ``raw_json.includes``, so a projection-scoped
+    ``check_copy`` would resolve zero rules and report a clean pass, even though the
+    normalized column still looks canonical. Projection-envelope authentication
+    (``includes_json`` == ``raw_json.includes``) must fail closed with structured
+    exit 2."""
+    pid = "jmd-menswear.website-build"
+    with tempfile.TemporaryDirectory() as tmp:
+        tampered = Path(tmp) / "proj-includes-tamper.sqlite"
+        shutil.copyfile(canonical_db, tampered)
+        conn = sqlite3.connect(tampered)
+        try:
+            row = conn.execute(
+                "SELECT includes_json, raw_json FROM projections WHERE projection_id = ?",
+                (pid,),
+            ).fetchone()
+            check(row is not None, f"precondition: projection {pid} must exist in the export")
+            norm = json.loads(row[0])
+            check(
+                norm.get("modules") and "jmd-menswear.website" in norm["modules"],
+                "precondition: website-build includes_json must pull in the website module",
+            )
+            doc = json.loads(row[1])
+            # Empty ONLY the embedded includes the service consumes; leave the
+            # normalized includes_json column canonical.
+            doc["includes"] = {"modules": [], "entities": [], "rules": []}
+            conn.execute(
+                "UPDATE projections SET raw_json = ? WHERE projection_id = ?",
+                (json.dumps(doc), pid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        code, out, err = run_cli(
+            ["check-copy", "--client", "jmd-menswear", "--projection", pid,
+             "--text", "Add to cart today", "--source", "sqlite", "--sqlite-path", str(tampered)]
+        )
+        check(
+            code == 2,
+            f"projection includes tampering must fail closed with exit 2, got {code} (out={out!r})",
+        )
+        check("error" in json.loads(err), "projection includes tampering must be structured")
+
+
+def test_error_sqlite_client_only_workstream_bypass(canonical_db: Path) -> None:
+    """Same-ID client workstream tampering (Codex Reviewer A, review 4741489241):
+    a genuine full export whose JMD ``clients.raw_json.workstreams`` gains a
+    client-only ``{"id": "bypass"}`` entry that NO module carries. The client id and
+    SQL row are unchanged, so the export authenticates — but scoping ``check_copy``
+    to ``bypass`` would select zero rules and report a clean result. An enforceable
+    workstream must resolve to at least one owned module, so this must fail closed
+    with structured exit 2."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tampered = Path(tmp) / "workstream-bypass.sqlite"
+        shutil.copyfile(canonical_db, tampered)
+        conn = sqlite3.connect(tampered)
+        try:
+            row = conn.execute(
+                "SELECT raw_json FROM clients WHERE client_id = ?", ("jmd-menswear",)
+            ).fetchone()
+            doc = json.loads(row[0])
+            workstreams = list(doc.get("workstreams") or [])
+            check(
+                all(w.get("id") != "bypass" for w in workstreams if isinstance(w, dict)),
+                "precondition: 'bypass' must not already be a declared workstream",
+            )
+            workstreams.append({"id": "bypass", "status": "active"})  # client-only; no module carries it
+            doc["workstreams"] = workstreams
+            conn.execute(
+                "UPDATE clients SET raw_json = ? WHERE client_id = ?",
+                (json.dumps(doc), "jmd-menswear"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        code, out, err = run_cli(
+            ["check-copy", "--client", "jmd-menswear", "--workstream", "bypass",
+             "--text", "Add to cart today", "--source", "sqlite", "--sqlite-path", str(tampered)]
+        )
+        check(
+            code == 2,
+            f"client-only workstream bypass must fail closed with exit 2, got {code} (out={out!r})",
+        )
+        check("error" in json.loads(err), "client-only workstream bypass must be structured")
+
+
 def test_error_yaml_root_not_a_repo() -> None:
     """The default `--source yaml --root .` pointed at a non-checkout (e.g. an
     installed consumer's own repo) must fail closed, not return an empty and
@@ -797,6 +886,8 @@ def main() -> int:
             ("error_sqlite_same_id_rule_tampering", lambda: test_error_sqlite_same_id_rule_tampering(canonical_db)),
             ("error_sqlite_correlated_module_deletion", lambda: test_error_sqlite_correlated_module_deletion(canonical_db)),
             ("error_sqlite_embedded_owner_drift", lambda: test_error_sqlite_embedded_owner_drift(canonical_db)),
+            ("error_sqlite_projection_includes_tampering", lambda: test_error_sqlite_projection_includes_tampering(canonical_db)),
+            ("error_sqlite_client_only_workstream_bypass", lambda: test_error_sqlite_client_only_workstream_bypass(canonical_db)),
             ("error_yaml_root_not_a_repo", lambda: test_error_yaml_root_not_a_repo()),
             ("sqlite_provenance_not_ambient", lambda: test_sqlite_provenance_not_ambient(ds_yaml, ds_sqlite)),
             ("installed_consumer_snapshot_contract", lambda: test_installed_consumer_snapshot_contract(canonical_db)),

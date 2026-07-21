@@ -315,6 +315,40 @@ def _validate_export(conn: sqlite3.Connection) -> None:
             f"manifest). Rebuild it with scripts/export_sqlite.py."
         )
 
+    # Projection envelope: the normalized ``includes_json`` column and the
+    # ``raw_json.includes`` the service ACTUALLY consumes (via ``resolve_scope`` /
+    # ``get_projection``) must agree. A genuine export writes BOTH from the same
+    # projection document (``export_sqlite`` sets ``includes_json =
+    # dump(data.get("includes", {}))`` and ``raw_json = dump(data)``), so they are
+    # equal by construction. Emptying ONLY the embedded ``raw_json.includes`` while
+    # leaving ``includes_json`` canonical (a same-id projection-content rewrite)
+    # would otherwise pass authentication yet let a projection-scoped
+    # ``check_copy``/``get_projection`` resolve zero modules/rules and report a
+    # vacuous clean result (Reviewer A: same-id projection-content tampering).
+    # Both sides are compared as PARSED documents: dict key order is already
+    # normalized by the exporter's ``sort_keys`` dump and is order-independent under
+    # ``==``, and list ordering is identical because both derive from the one source
+    # document — so any surviving inequality is a genuine same-id divergence, not a
+    # representation artifact the exporter already normalized.
+    for pid, includes_json, raw in conn.execute(
+        "SELECT projection_id, includes_json, raw_json FROM projections"
+    ):
+        doc = _raw("projections", pid, raw)
+        try:
+            normalized_includes = json.loads(includes_json) if includes_json else {}
+        except json.JSONDecodeError as exc:
+            raise ServiceError(f"projections.{pid}: corrupt includes_json ({exc})")
+        embedded_includes = doc.get("includes") or {}
+        if normalized_includes != embedded_includes:
+            raise ServiceError(
+                f"SQLite export is internally inconsistent: projection {pid!r} "
+                f"normalized 'includes_json' disagrees with its embedded "
+                f"raw_json.includes (same-id projection-content drift/tampering); "
+                f"the service resolves projection scope from the embedded value, so "
+                f"this would silently change what a scoped check enforces. Rebuild "
+                f"it with scripts/export_sqlite.py."
+            )
+
     # Cross-check the normalized rule/entity tables against the module documents
     # the service reads at runtime, by FULL CONTENT. A real export writes each
     # rule/entity into BOTH places identically; if the same id disagrees in any
@@ -544,6 +578,26 @@ def _require_workstream(ds: Dataset, client_id: str, workstream: Optional[str]) 
         raise ServiceError(
             f"unknown workstream {workstream!r} for client {client_id!r} "
             f"(known workstreams: {listed})"
+        )
+    # A RECOGNIZED workstream must resolve to at least one module OWNED by this
+    # client and carrying it. A workstream declared only on the client document
+    # (``client.raw_json.workstreams``) with no owning module — e.g. a same-id
+    # ``{"id": "bypass"}`` addition in a tampered SQLite snapshot — is recognized
+    # by ``_client_workstreams`` yet selects zero rules in ``_select_check_rules`` /
+    # ``list_rules``, turning a blocking ``check_copy`` into a vacuous clean pass.
+    # Fail closed instead (Codex Reviewer A: same-id client workstream tampering).
+    # Genuine workstreams are unaffected: every client-declared workstream in the
+    # canonical data is also carried by a module, and unknown workstreams still hit
+    # the branch above.
+    if not any(
+        workstream in (m.get("workstreams") or [])
+        for m in _client_modules(ds, client_id)
+    ):
+        raise ServiceError(
+            f"workstream {workstream!r} for client {client_id!r} resolves to no "
+            f"owned module: it is declared on the client but no module carries it, "
+            f"so scoping to it would select zero rules and report a vacuous clean "
+            f"result. Refusing to run an unenforceable workstream scope."
         )
 
 
