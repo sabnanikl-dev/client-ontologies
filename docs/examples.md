@@ -354,7 +354,7 @@ Unknown client/projection, an unrecognized `--workstream` (a scope typo can neve
 
 ### Installed-consumer snapshot
 
-The packaged `ontology` command runs with the consumer repo as its cwd, so it is pointed at a snapshot explicitly: pin the CI-published SQLite export and call `--source sqlite --sqlite-path "$ONTOLOGY_DB"` (no Ruby), or check out this repo and pass `--source yaml --root <checkout>`. The default ambient `--root .` fails closed in a consumer repo instead of searching it. See the README ("Installed-consumer snapshot contract") for the pinned pre-publish hook.
+The packaged `ontology` command runs with the consumer repo as its cwd, so it is pointed at a snapshot explicitly: pin a SQLite export and call `--source sqlite --sqlite-path "$ONTOLOGY_DB"` (no Ruby), or check out this repo and pass `--source yaml --root <checkout>`. CI builds the export on every push, but publishing it as a fetchable versioned artifact is issue #8's scope and not yet wired up — until then produce the snapshot yourself with `export_sqlite.py`. The default ambient `--root .` fails closed in a consumer repo instead of searching it. See the README ("Installed-consumer snapshot contract") for the pinned pre-publish hook.
 
 ### The core → CLI → MCP → API layering
 

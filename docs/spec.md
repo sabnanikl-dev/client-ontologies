@@ -1577,10 +1577,13 @@ serialized or described as recorded outcomes, baselines, or targets.
 
 **Installed-consumer contract.** The packaged `ontology` command runs with the
 consumer repo as its cwd, so it must be pointed at a snapshot explicitly: a
-consumer pins the CI-published SQLite export and calls `--source sqlite
---sqlite-path <pinned db>` (pure stdlib `sqlite3`, no Ruby, `repo_commit: null`),
-or, if it checks out this repo, `--source yaml --root <checkout>`. The default
-ambient `--root .` fails closed in a consumer repo rather than searching it.
+consumer pins a SQLite export and calls `--source sqlite --sqlite-path <pinned
+db>` (pure stdlib `sqlite3`, no Ruby, `repo_commit: null`), or, if it checks out
+this repo, `--source yaml --root <checkout>`. CI builds the export on every push
+today, but publishing it as a fetchable versioned artifact is issue #8's scope
+and not yet wired up — until then the consumer produces the snapshot itself with
+`export_sqlite.py`. The default ambient `--root .` fails closed in a consumer
+repo rather than searching it.
 
 `check_copy` is the enforcement surface: as a pre-publish git hook in a consumer
 repo it exits non-zero on a blocking violation before anything ships. See

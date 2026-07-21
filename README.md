@@ -277,11 +277,14 @@ from the ambient `--root .`; a consumer repo has no `clients/` directory, and th
 CLI **fails closed** there (structured `{"error": …}`, exit 2) rather than
 returning an empty, vacuously "clean" result. The supported consumer pattern is:
 
-- **Pin a SQLite snapshot.** The `client-ontologies` CI publishes the exported DB
-  as a versioned artifact; a consumer's SessionStart hook fetches that snapshot to
-  a known path (here `$ONTOLOGY_DB`). The `sqlite` backend is pure stdlib
-  `sqlite3` — **no Ruby needed** at the consumer — and carries `repo_commit: null`
-  (it never borrows the consumer repo's Git state as ontology provenance).
+- **Pin a SQLite snapshot.** CI builds the exported DB on every push
+  (`export_sqlite.py`); publishing it as a versioned, fetchable artifact is owned
+  by issue #8 and not yet wired up, so until then a consumer pins a snapshot it
+  produces itself (run `export_sqlite.py` against a checkout) to a known path
+  (here `$ONTOLOGY_DB`). A consumer's SessionStart hook then keeps that snapshot
+  current. The `sqlite` backend is pure stdlib `sqlite3` — **no Ruby needed** at
+  the consumer — and carries `repo_commit: null` (it never borrows the consumer
+  repo's Git state as ontology provenance).
 - **Always pass `--source sqlite --sqlite-path "$ONTOLOGY_DB"`** (or, if the
   consumer checks out this repo, an explicit `--source yaml --root <checkout>`).
 
