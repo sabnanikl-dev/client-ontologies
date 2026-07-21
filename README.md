@@ -268,6 +268,23 @@ or foreign SQLite file, backend drift, or malformed args, and never returns a
 resource outside the selected projection. `draft`/`inferred` resources are flagged
 `planning_only` and are never presented as recorded outcomes.
 
+### Installed-consumer snapshot contract
+
+When the `ontology` command is **installed** into a consumer repo (pinned by
+tag/SHA), it runs with that consumer's working directory as cwd — so it must be
+pointed at an ontology snapshot explicitly. It does **not** discover the ontology
+from the ambient `--root .`; a consumer repo has no `clients/` directory, and the
+CLI **fails closed** there (structured `{"error": …}`, exit 2) rather than
+returning an empty, vacuously "clean" result. The supported consumer pattern is:
+
+- **Pin a SQLite snapshot.** The `client-ontologies` CI publishes the exported DB
+  as a versioned artifact; a consumer's SessionStart hook fetches that snapshot to
+  a known path (here `$ONTOLOGY_DB`). The `sqlite` backend is pure stdlib
+  `sqlite3` — **no Ruby needed** at the consumer — and carries `repo_commit: null`
+  (it never borrows the consumer repo's Git state as ontology provenance).
+- **Always pass `--source sqlite --sqlite-path "$ONTOLOGY_DB"`** (or, if the
+  consumer checks out this repo, an explicit `--source yaml --root <checkout>`).
+
 `check-copy` is the enforcement surface — as a **pre-publish git hook** in a
 consumer repo it gates a blocking violation before anything ships:
 
@@ -275,8 +292,11 @@ consumer repo it gates a blocking violation before anything ships:
 # .git/hooks/pre-commit (consumer repo)
 #!/usr/bin/env bash
 set -euo pipefail
+# Pinned ontology snapshot fetched at session start (versioned; Ruby-free).
+ONTOLOGY_DB="${ONTOLOGY_DB:-.ontology/client-ontologies.sqlite}"
 for f in $(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(md|html|mdx)$' || true); do
-  ontology check-copy --client jmd-menswear --file "$f" || {
+  ontology check-copy --client jmd-menswear \
+      --source sqlite --sqlite-path "$ONTOLOGY_DB" --file "$f" || {
     echo "Blocked: '$f' violates a JMD ontology guardrail." >&2
     exit 1
   }

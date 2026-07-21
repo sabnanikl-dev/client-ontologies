@@ -350,7 +350,11 @@ python3 scripts/ontology_cli.py check-copy --client jmd-menswear --file draft.md
 
 ### Failing closed
 
-Unknown client/projection, an unavailable or foreign SQLite path, backend drift, and malformed arguments all print a structured `{"error": "..."}` on stderr and exit non-zero (`2`). Projection-scoped operations never return an entity, rule, or module outside the selected projection.
+Unknown client/projection, an unrecognized `--workstream` (a scope typo can never silently select zero rules and pass a blocking check), a `--source yaml --root` that is not a checkout (no `clients/`), an unavailable SQLite path, and malformed arguments (including argparse usage errors) all print a structured `{"error": "..."}` on stderr and exit non-zero (`2`). A SQLite backend is authenticated before any operation reads it — all export tables present and core tables non-empty, each row's id agreeing with its `raw_json` id and naming a real client, and the normalized `rules`/`entities` tables matching the module documents the service reads — so an incomplete, foreign, forged, or drifted snapshot (e.g. one emptied to suppress a blocking rule) fails closed rather than returning a clean-looking result. Projection-scoped operations never return an entity, rule, or module outside the selected projection. A `sqlite` response carries `repo_commit: null` (the export embeds no provenance; the value is never taken from the ambient working directory's Git state).
+
+### Installed-consumer snapshot
+
+The packaged `ontology` command runs with the consumer repo as its cwd, so it is pointed at a snapshot explicitly: pin the CI-published SQLite export and call `--source sqlite --sqlite-path "$ONTOLOGY_DB"` (no Ruby), or check out this repo and pass `--source yaml --root <checkout>`. The default ambient `--root .` fails closed in a consumer repo instead of searching it. See the README ("Installed-consumer snapshot contract") for the pinned pre-publish hook.
 
 ### The core → CLI → MCP → API layering
 

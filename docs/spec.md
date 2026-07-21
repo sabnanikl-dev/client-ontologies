@@ -1540,8 +1540,13 @@ there is **no create/modify/delete** and no live account/CMS/GBP mutation.
 | `get_projection(projection)` | `ontology projection --id <id>` | resolved slice (`includes` + resolved entities/rules) + provenance |
 
 The default projection for `get_client_context` is `<client>.agent-context`. Every
-response carries a `_meta` envelope: `read_mode` (`yaml`|`sqlite`), `repo_commit`
-(when available), and `generated_at`.
+response carries a `_meta` envelope: `read_mode` (`yaml`|`sqlite`), `repo_commit`,
+and `generated_at`. `repo_commit` is derived **only** from a concrete ontology
+`--root` (the `yaml` backend); a `sqlite` dataset has no root and embeds no
+provenance, so its `repo_commit` is `null`. It is never taken from the ambient
+working directory's Git state — an installed consumer running the CLI inside its
+own repository must not have that consumer repo's commit mislabelled as ontology
+provenance.
 
 **Two backends, one model.** `--source yaml` (default) reads canonical YAML through
 the shared loader (§5) and uses Ruby; `--source sqlite --sqlite-path <db>` reads a
@@ -1551,13 +1556,31 @@ resource's full `raw_json`), so YAML and SQLite answers are equivalent — prove
 against the competency corpus (§ `tests/run_cli.py` reuses issue #31's
 `evaluate_suite`/`load_questions` without re-encoding any expected value).
 
-**Fail-closed contract.** An unknown client/projection, an unavailable or foreign
-SQLite file, backend drift (a SQLite file that is not a client-ontologies export),
-and malformed arguments all produce a structured `{"error": …}` on stderr and a
-non-zero exit. Projection-scoped operations never return an entity, rule, or module
-outside the selected projection. `draft`/`inferred` resources — e.g. Femme's
-`baseline: unknown` local-visibility metrics (§15) — are flagged `planning_only`
-and are never serialized or described as recorded outcomes, baselines, or targets.
+**Fail-closed contract.** An unknown client/projection, an **unrecognized
+`--workstream`** (a scope typo must never silently select zero rules and let a
+blocking `check_copy` report a clean pass), a `--source yaml --root` that is not a
+client-ontologies checkout (no `clients/` — so an installed consumer's own repo
+does not yield an empty, vacuously "clean" result), an unavailable SQLite file, and
+malformed arguments (including argparse usage errors) all produce a structured
+`{"error": …}` on stderr and a non-zero exit (`2`). A SQLite backend is
+**authenticated before any operation reads it**: every table the exporter writes
+must be present and the core tables non-empty; each row's primary id must agree
+with its `raw_json` id and name a client in the same export; and the normalized
+`rules`/`entities` tables must match the rules/entities embedded in the module
+`raw_json` the service reads — so an incomplete, foreign, forged, or drifted
+snapshot (e.g. one whose module documents were emptied to suppress a blocking rule)
+fails closed instead of returning a clean-looking enforcement result. Projection
+-scoped operations never return an entity, rule, or module outside the selected
+projection. `draft`/`inferred` resources — e.g. Femme's `baseline: unknown`
+local-visibility metrics (§15) — are flagged `planning_only` and are never
+serialized or described as recorded outcomes, baselines, or targets.
+
+**Installed-consumer contract.** The packaged `ontology` command runs with the
+consumer repo as its cwd, so it must be pointed at a snapshot explicitly: a
+consumer pins the CI-published SQLite export and calls `--source sqlite
+--sqlite-path <pinned db>` (pure stdlib `sqlite3`, no Ruby, `repo_commit: null`),
+or, if it checks out this repo, `--source yaml --root <checkout>`. The default
+ambient `--root .` fails closed in a consumer repo rather than searching it.
 
 `check_copy` is the enforcement surface: as a pre-publish git hook in a consumer
 repo it exits non-zero on a blocking violation before anything ships. See

@@ -43,6 +43,12 @@ only because later issues build on them:
 - **#25** — the `metric` entity type modeled against real Femme local-visibility outcomes
   (`draft`/`baseline: unknown` where no snapshot exists).
 - **#26** — corrected agent-facing `CLAUDE.md` guidance.
+- **#32** — separated the live `docs/spec.md` contract from design history and normalized
+  this roadmap to current state.
+- **#23** — portable evidence anchors and the deterministic evidence-health check
+  (`scripts/check_evidence.py`).
+- **#22** — constrained relationship semantics: controlled predicate vocabulary,
+  cardinality, `inverse`, and bounded domain/range.
 
 ## Hard dependency map
 
@@ -66,8 +72,9 @@ work depends on them.
      gold source highlights; these gate activation, they do not authorize implementation)
 ```
 
-Issues #22, #23, and #24 have no hard implementation dependency, but their placement
-below avoids rework and reduces risk for later agents.
+Issue #24 has no hard implementation dependency, but its placement below avoids rework
+and reduces risk for later agents. (The formerly-queued #22 and #23, also dependency-free,
+are now delivered.)
 
 **Soft sequencing, not hard dependencies:**
 
@@ -83,18 +90,20 @@ below avoids rework and reduces risk for later agents.
 
 ## Recommended execution queue
 
-The queue below lists only **open** issues. The documentation-normalization issue **#32**
-(separating the live contract from design history and refreshing this roadmap) is the
-current Phase 0 work and is described under Phases below.
+The queue below lists the remaining **open** issues, with recently delivered work kept as
+✅ rows for continuity. The documentation-normalization issue **#32**, portable evidence
+anchors **#23**, and relationship-semantics constraints **#22** are all delivered (see
+Completed foundations); the current open governance work begins at **#9**.
 
 | Order | Issue | Work | Why here / gate |
 |---:|---:|---|---|
 | ✅ | **#31** *(delivered)* | Competency-question traceability and deterministic semantic outcome tests | Delivered. Shared outcome-usefulness corpus (test metadata, not a canonical kind); reused by #19 to prove YAML/SQLite answer parity. |
 | ✅ | **#19** *(delivered)* | Read-only runtime core and CLI | Delivered. Clients, context, projections, rules, and copy checks through one shared transport-agnostic service; YAML and SQLite backends; `ontology`/`ontology-mcp` entry points. Reuses #31's corpus to prove consumer operations. |
+| ✅ | **#32** *(delivered)* | Separate the live contract from design history; normalize this roadmap | Delivered. `docs/spec.md` is normative and current; design history relocated; this roadmap tracks live state. |
+| ✅ | **#23** *(delivered)* | Portable evidence anchors and evidence-health reporting | Delivered. `scripts/check_evidence.py` re-hashes portable anchors without conflating citation health with resource lifecycle. |
+| ✅ | **#22** *(delivered)* | Constrain relationship predicates, cardinality, and inverse names | Delivered. Controlled predicate vocabulary + bounded domain/range (the #25 metric work exercises predicates such as `measures`). |
 | 1 | **#9** | Make approval gates and records first-class | Governance foundation; blocks #4 and the approval-guard portion of #10. |
 | 4 | **#8** | Add projection provenance and runtime build metadata | Follows #9 in the governance layer and lets consumers identify the ontology state behind projections and exports. |
-| 5 | **#23** | Add portable evidence anchors and evidence-health reporting | Completes the provenance/evidence integrity layer without conflating citation health with resource lifecycle. |
-| 6 | **#22** | Constrain relationship predicates, cardinality, and inverse names | Stabilize relationship semantics before broader model expansion (the delivered #25 metric work already exercises predicates such as `measures`). |
 | 7 | **#4** | Model actions, functions, and agent-exposed operations | Requires #9. Modeling an operation makes it discoverable, never automatically executable. |
 | 8 | **#10** | Validate/export state machines and add transition guards | Planned after #4; guard behavior requires #9. Validation/export may be split first only if #9 is unexpectedly delayed. |
 | 9 | **#24** | Add deterministic new-client scaffolding | Reuse #21's loader and land before onboarding a third real client. |
@@ -125,7 +134,7 @@ The table is the default queue, not a reason to ignore changed business context:
 
 ### Phase 0 — Agent hygiene, a small authoring proof, and a current contract
 
-Issues: **#26 (done) -> #25 (done) -> #32 (current)**
+Issues: **#26 (done) -> #25 (done) -> #32 (done)**
 
 Exit gate:
 
@@ -138,7 +147,7 @@ Exit gate:
   inventory are relocated under `docs/research/`, future ideas are marked
   proposed/trigger-gated, this roadmap tracks only live open issues, and all agent-facing
   contract surfaces agree on the four resource kinds, live paths, and commands.
-  *(#32, the current documentation-only work.)*
+  *(#32, delivered.)*
 
 ### Phase 1 — Shared foundations, outcome corpus, and runtime v1
 
@@ -155,12 +164,14 @@ Exit gate:
 
 ### Phase 2 — Governance and semantic integrity
 
-Issues: **#9 -> #8 -> #23 -> #22**
+Issues: **#9 -> #8 -> #23 (done) -> #22 (done)**
 
 Exit gate:
 
 - Approval gates, scoped approval records, provenance, evidence health, and relationship
-  semantics are machine-checkable and exported where specified.
+  semantics are machine-checkable and exported where specified. *(Evidence health #23 and
+  relationship semantics #22 are delivered; approval gates #9 and provenance #8 remain
+  open.)*
 - Approval records remain evidence of one scoped past approval, never standing authority
   for future actions.
 
@@ -257,8 +268,8 @@ The currently open issues cover new-client scaffolding (#24), governance and pro
 (#9, #8), actions and state machines (#4, #10), handoff and lifecycle hygiene (#12, #6),
 interfaces (#5), the LangExtract experiment (#27–#28), and speculative retrieval (#7).
 Deterministic outcome/competency testing (#31), the runtime surface (#19), relationship
-semantics (#22), evidence portability (#23), metric modeling (#25), and agent-doc drift
-(#26) are delivered; this roadmap normalization is #32.
+semantics (#22), evidence portability (#23), metric modeling (#25), agent-doc drift
+(#26), and this roadmap/spec normalization (#32) are delivered.
 
 One material gap remains only partially covered: typed properties with per-property
 evidence and confidence. Issue #5 provides a possible extension point, but a separate
