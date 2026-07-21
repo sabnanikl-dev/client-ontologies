@@ -47,6 +47,11 @@ jobs:
       - name: Run machine-check rule engine tests
         run: python3 tests/run_checks.py
 
+      # Read-only runtime surface (issue #19): CLI acceptance, YAML/SQLite backend
+      # parity, projection isolation, and competency-corpus reuse. Stdlib only.
+      - name: Run runtime CLI/service tests
+        run: python3 tests/run_cli.py
+
       - name: Run evidence-health checker tests
         run: python3 tests/run_evidence.py
 
