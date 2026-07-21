@@ -42,6 +42,7 @@ Each client folder has an `ontology.yaml` **manifest** — the stable entry poin
 
 ```text
 client-ontologies/
+  pyproject.toml           # packages the runtime core + `ontology`/`ontology-mcp` scripts (zero deps)
   docs/
     spec.md
     conventions.md
@@ -63,13 +64,18 @@ client-ontologies/
     validate_ontology.py
     check_rules.py         # machine_check guardrail engine (library + CLI)
     check_evidence.py      # evidence-health / content_hash checker (library + CLI)
+    ontology_service.py    # read-only runtime service: transport-agnostic ops (#19)
+    ontology_cli.py        # `ontology` CLI adapter over the runtime service (#19)
     export_sqlite.py
   tests/
     run_fixtures.py       # invalid fixtures must fail validation
+    run_predicates.py      # predicate enum/constraint/inverse stay in sync
     run_export.py          # valid fixture must validate + export
     run_checks.py          # guardrail engine matching + exit semantics
     run_evidence.py        # evidence-health hashing + strict exit semantics
     run_competency.py      # competency questions answered against a temp export
+    run_cli.py             # read-only runtime CLI/service regressions (#19)
+    installed_smoke.py     # installed-console runtime smoke (Ruby-free; CI #40)
     competency/
       questions.yaml       # test-owned competency-question registry (not canonical)
     fixtures/
@@ -149,8 +155,14 @@ python3 tests/run_predicates.py  # predicate enum/constraint/inverse stay in syn
 python3 tests/run_export.py      # the valid fixture must PASS, then export cleanly
 python3 tests/run_competency.py  # each client still answers its competency questions
 python3 tests/run_checks.py      # the guardrail engine matches + exits correctly
+python3 tests/run_cli.py         # the read-only runtime CLI/service surface (#19)
 python3 tests/run_evidence.py    # the evidence-health checker hashes + exits correctly
 ```
+
+This is the same dependency-light suite `.github/workflows/validate.yml` runs (in
+this order, after `validate_ontology.py` and `export_sqlite.py`). A separate
+Python 3.10 lane additionally installs the package and drives the runtime through
+its `ontology`/`ontology-mcp` console scripts (`tests/installed_smoke.py`).
 
 - `run_fixtures.py` drives `tests/fixtures/<case>/` through the validator. Each case is a minimal repo root that must fail for one specific reason — covering schema-shape rejections (missing required fields, malformed IDs, bad enums, unknown kinds, unknown fields, malformed manifests/projections, and a malformed `machine_check` payload) and cross-reference/evidence/secret rejections (missing evidence on an active object, a dangling relationship endpoint, a projection referencing an unknown module, a duplicate ID, an uncompilable `regex_policy` pattern, and a committed secret pattern). It fails if any fixture unexpectedly passes or fails with the wrong message.
 - `run_predicates.py` proves the relationship-predicate vocabulary stays in sync: the schema `predicate` enum, the validator's domain/range `PREDICATE_CONSTRAINTS`, and every `inverse` reference resolve to one another.
