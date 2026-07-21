@@ -42,9 +42,15 @@ Design contract (issue #31):
   * Emits a human-readable report by default and machine JSON with ``--json``;
     on a failed question it names the question and shows expected vs actual.
   * Exits non-zero when any REQUIRED question fails, the drift-isolation
-    regression fails, the registry shape-validation probes fail, the
-    loading-isolation probes detect cross-client / unrelated-module leakage, or
-    the resolver-read isolation probe observes an excluded module being parsed.
+    regression fails (measured against the clean baseline, so an already-failing
+    OPTIONAL question stays non-gating), the registry shape-validation probes fail,
+    the loading-isolation probes detect cross-client / unrelated-module leakage,
+    the resolver-read isolation probe observes an excluded module being parsed, the
+    relationship/path scope-isolation or path-shape probes fail, or the
+    reporting-seam probes (boolean row type-sensitivity + explicit ``--no-drift``
+    skipped-check representation) fail. A failed OPTIONAL question never gates the
+    exit code but is reported honestly. With ``--no-drift`` the drift regression is
+    represented explicitly as SKIPPED (not silently "passed").
 
 Reuse seam for issue #19: import ``load_questions`` and
 ``evaluate_suite(db_path, questions)`` (or the lower-level ``evaluate_question``
@@ -241,6 +247,24 @@ _COLUMN_VOCAB = {
 _BOOL_COLUMNS = frozenset({"public_facing"})
 
 
+def _normalize_bool_columns(data: dict[str, Any]) -> None:
+    """Coerce SQLite integer boolean columns (``public_facing``) back to ``bool``.
+
+    ``scripts/export_sqlite.py`` stores ``public_facing`` as SQLite integer ``0/1``
+    (there is no native SQLite boolean). Read back verbatim, a selected row would
+    carry an ``int`` where the registry — which is type-checked to require a real
+    ``true``/``false`` for this boolean column — carries a ``bool``. Python's
+    ``False == 0``/``True == 1`` would then let ``_compare_rows`` pass a row whose
+    *serialized* expected (``false``) and actual (``0``) answers differ (Codex
+    Reviewer A, fix-cycle exception). Normalizing here — before filtering,
+    selection, and comparison — keeps the boolean column type-true end to end so a
+    genuine boolean question passes and a true/false mismatch fails honestly.
+    """
+    for col in _BOOL_COLUMNS:
+        if col in data and data[col] is not None:
+            data[col] = bool(data[col])
+
+
 def _check_vocab_token(source: str, qid: Any, label: str, token: Any, vocab_name: str, allow_x: bool) -> None:
     """Reject a controlled-vocabulary operand that is not a real schema term."""
     if not isinstance(token, str):
@@ -284,14 +308,16 @@ def _check_column_operand_types(source: str, qid: Any, label: str, values: Any, 
 
 
 def _expected_answer_is_empty(op: str, expect: dict[str, Any]) -> bool:
-    """True when a question asserts NO expected resource (an empty coverage claim).
+    """True when a question asserts NO expected resource (an empty positive claim).
 
-    A ``required`` question is a positive coverage proof, so an empty expected
-    answer with vacuous universal guards must not pass as coverage (Codex Reviewer
-    A). ``validate_questions`` rejects that combination; a deliberate absence /
-    negative-assertion is intentionally NOT smuggled in through an empty required
-    expectation (see the header note), so an intentionally empty answer must be
-    marked ``required: false``.
+    A ``required`` question is GATING and must be a NON-EMPTY positive assertion, so
+    an empty expected answer with vacuous universal guards must not pass (Codex
+    Reviewer A). ``validate_questions`` rejects that combination; a deliberate
+    absence / negative-assertion is intentionally NOT smuggled in through an empty
+    required expectation (see the header note), so an intentionally empty answer
+    must be marked ``required: false``. (Being required is what gates; whether the
+    family is ``covered`` is a separate, evidence-backed judgement recorded in
+    docs/coverage.md.)
     """
     if op == "projection_resources":
         res = expect.get("resources") or {}
@@ -747,20 +773,21 @@ def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
             _q_err(source, qid, "'guards' must be a list")
         for guard in guards or []:
             _validate_guard(source, qid, guard, op, output_keys)
-        # A required question is a POSITIVE coverage proof, so it must assert a
-        # non-empty expected answer. An empty expected answer with universal
-        # ``require_*`` guards passes vacuously and would count as proof of coverage
-        # while proving nothing (Codex Reviewer A). A deliberate absence /
+        # A required question is GATING and must be a NON-EMPTY positive assertion.
+        # An empty expected answer with universal ``require_*`` guards passes
+        # vacuously and proves nothing (Codex Reviewer A). A deliberate absence /
         # negative-assertion question is intentionally NOT satisfied this way: mark
-        # it ``required: false`` (non-gating, never cited as ``covered``) rather
-        # than letting an empty required expectation masquerade as coverage. An
-        # explicit absence-query mode remains a deliberate future extension.
+        # it ``required: false`` (non-gating) rather than letting an empty required
+        # expectation pass vacuously. (Being required gates the runner; whether the
+        # family is ``covered`` is decided separately in docs/coverage.md by whether
+        # the retrieved resources are evidence-backed.) An explicit absence-query
+        # mode remains a deliberate future extension.
         if req and _expected_answer_is_empty(op, expect):
             key = _expect_envelope_key(op)
             _q_err(source, qid,
-                   f"a required (coverage-proof) question must assert a non-empty "
-                   f"expected answer; empty expect.{key} cannot serve as coverage "
-                   f"proof — mark the question 'required: false' if an empty answer "
+                   f"a required (gating) question must assert a non-empty "
+                   f"expected answer; empty expect.{key} cannot serve as a positive "
+                   f"assertion — mark the question 'required: false' if an empty answer "
                    f"is intended (an explicit absence-assertion mode is deliberately "
                    f"not accepted here)")
     return questions
@@ -833,6 +860,7 @@ def _scoped_rows(conn: sqlite3.Connection, op: str, client_id: str, includes: di
     rows: list[dict[str, Any]] = []
     for record in conn.execute(f"SELECT {select_cols} FROM {table} WHERE client_id = ?", (client_id,)):
         data = dict(zip(ordered_cols, record[:-1]))
+        _normalize_bool_columns(data)
         data["_raw"] = json.loads(record[-1]) if record[-1] else {}
         in_scope = data.get("module_id") in scoped_modules or _id_matches(data.get(id_col), id_patterns)
         if in_scope:
@@ -1061,10 +1089,19 @@ def _row_key(row: dict[str, Any]) -> str:
 
 
 def _compare_rows(expected: list[dict[str, Any]], actual: list[dict[str, Any]]) -> list[str]:
-    """Return human diagnostics for an expected-vs-actual row-set mismatch."""
+    """Return human diagnostics for an expected-vs-actual row-set mismatch.
+
+    Comparison is JSON/type-sensitive: rows match only when their canonical JSON
+    serializations are equal, so ``{"public_facing": false}`` never equals
+    ``{"public_facing": 0}`` (Python's ``False == 0`` would). Combined with
+    ``_normalize_bool_columns`` this closes the boolean false-pass Codex Reviewer A
+    reproduced — a legitimate boolean answer still matches (both sides are real
+    ``bool``), while a residual type drift is reported as a mismatch rather than
+    silently passing.
+    """
     exp = _normalize_rows([dict(r) for r in expected])
     act = _normalize_rows([dict(r) for r in actual])
-    if exp == act:
+    if sorted(_row_key(r) for r in exp) == sorted(_row_key(r) for r in act):
         return []
     exp_keys = {_row_key(r) for r in exp}
     act_keys = {_row_key(r) for r in act}
@@ -1520,11 +1557,24 @@ def run_drift_regression(
     therefore holds even when two questions share one scoped export (both Femme
     questions share the ``local-seo`` scope), proving a single-point drift
     pinpoints its question rather than failing everything (or nothing).
+
+    Isolation is measured against the CLEAN baseline, not against an empty set: a
+    question that already fails without any mutation (e.g. a failing OPTIONAL
+    question, which is deliberately non-gating) is subtracted so drift isolation
+    only asks "did the injected change newly break exactly its one target?".
+    Otherwise a single failing optional question would appear in every drift
+    case's failure list and force ``drift['passed'] = False`` — indirectly gating
+    the runner on an optional failure the exit logic is supposed to ignore (Codex
+    Reviewer A, fix-cycle exception).
     """
     by_id = {q["id"]: q for q in questions}
+    baseline = _evaluate_with_exports(exports, questions)
+    baseline_failed = {r["id"] for r in baseline if r["status"] == "fail"}
     cases: list[dict[str, Any]] = []
     passed = True
-    for i, scenario in enumerate(_drift_scenarios()):
+
+    def _drift_once(i: int, scenario: dict[str, Any], eval_questions: list[dict[str, Any]],
+                    base_failed: set) -> dict[str, Any]:
         target = by_id[scenario["expect_failed"]]
         key = (target["client_id"], target["projection"])
         mutated = tmpdir / f"drift-{i}.sqlite"
@@ -1535,22 +1585,86 @@ def run_drift_regression(
             conn.commit()
         finally:
             conn.close()
-        results = _evaluate_with_exports(exports, questions, overrides={key: mutated})
+        results = _evaluate_with_exports(exports, eval_questions, overrides={key: mutated})
         failed_ids = sorted(r["id"] for r in results if r["status"] == "fail")
+        newly_failed = sorted(fid for fid in failed_ids if fid not in base_failed)
         expected_failed = [scenario["expect_failed"]]
         diagnostic = next((r["failures"] for r in results if r["id"] == scenario["expect_failed"]), [])
-        isolated = failed_ids == expected_failed and bool(diagnostic)
-        passed = passed and isolated
-        cases.append(
-            {
-                "name": scenario["name"],
-                "expected_failed": scenario["expect_failed"],
-                "actual_failed": failed_ids,
-                "isolated": isolated,
-                "diagnostic_present": bool(diagnostic),
-            }
-        )
+        isolated = newly_failed == expected_failed and bool(diagnostic)
+        return {
+            "expected_failed": scenario["expect_failed"],
+            "actual_failed": failed_ids,
+            "newly_failed": newly_failed,
+            "baseline_failed": sorted(base_failed),
+            "isolated": isolated,
+            "diagnostic_present": bool(diagnostic),
+        }
+
+    scenarios = _drift_scenarios()
+    for i, scenario in enumerate(scenarios):
+        case = _drift_once(i, scenario, questions, baseline_failed)
+        case["name"] = scenario["name"]
+        passed = passed and case["isolated"]
+        cases.append(case)
+
+    # Optional-failure interaction (Codex Reviewer A, fix-cycle exception): inject a
+    # synthetic OPTIONAL question that fails at baseline (an impossible expected row
+    # on an already-exported scope), then prove a required-target drift STILL
+    # isolates to exactly that target. This exercises the very path the current
+    # registry cannot (its lone optional question passes): a failing optional must
+    # not turn drift isolation red.
+    opt_scenario = next(s for s in scenarios if s["name"] == "relationship-confidence-drift")
+    opt_key = (by_id[opt_scenario["expect_failed"]]["client_id"],
+               by_id[opt_scenario["expect_failed"]]["projection"])
+    failing_optional = {
+        "id": "drift-probe.synthetic-failing-optional",
+        "client_id": opt_key[0],
+        "projection": opt_key[1],
+        "required": False,
+        "query": {"op": "entities", "filters": {"entity_id": "does-not-exist"},
+                  "select": ["entity_id"]},
+        "expect": {"rows": [{"entity_id": "does-not-exist"}]},
+        "guards": [],
+    }
+    questions_with_opt = questions + [failing_optional]
+    baseline_opt = _evaluate_with_exports(exports, questions_with_opt)
+    baseline_opt_failed = {r["id"] for r in baseline_opt if r["status"] == "fail"}
+    opt_case = _drift_once(len(scenarios), opt_scenario, questions_with_opt, baseline_opt_failed)
+    opt_case["name"] = "optional-failure-non-gating"
+    # The proof is only meaningful if the synthetic optional actually failed at
+    # baseline AND drift still isolated the required target despite it.
+    opt_case["optional_failed_at_baseline"] = failing_optional["id"] in baseline_opt_failed
+    opt_case["isolated"] = opt_case["isolated"] and opt_case["optional_failed_at_baseline"]
+    passed = passed and opt_case["isolated"]
+    cases.append(opt_case)
+
     return {"passed": passed, "cases": cases}
+
+
+def _skipped_drift() -> dict[str, Any]:
+    """The drift-regression result when ``--no-drift`` skips it.
+
+    A skipped check must be represented EXPLICITLY as skipped — not as
+    ``{"passed": True}``, which reads as "the check ran and held" in JSON and in
+    the human summary (Codex Reviewer A, fix-cycle exception). ``passed`` stays
+    ``True`` so the skip never gates the exit code, but ``skipped: True`` lets
+    every consumer (and the summary line) report it honestly as not-run.
+    """
+    return {"passed": True, "skipped": True, "cases": []}
+
+
+def _summary_checks_line(drift: dict[str, Any]) -> str:
+    """Build the trailing "... checks hold" summary clause.
+
+    When drift isolation was skipped (``--no-drift``) the clause says so explicitly
+    and does NOT claim it held; otherwise drift isolation is listed among the
+    checks that hold.
+    """
+    other = ("registry shape + loading isolation + resolver-read isolation + "
+             "query scope-isolation + path-shape + reporting-seam checks hold")
+    if drift.get("skipped"):
+        return f"drift isolation SKIPPED (--no-drift); {other}"
+    return f"drift isolation + {other}"
 
 
 # --------------------------------------------------------------------------- #
@@ -2041,6 +2155,105 @@ def run_path_shape_probes(tmpdir: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Runner reporting-seam regression (row-type false-pass + explicit skipped-check
+# representation — the fix-cycle-exception current-head reporting seams)
+# --------------------------------------------------------------------------- #
+_ROW_TYPE_FIXTURE = {
+    "clients/acme/ontology.yaml": (
+        'schema_version: "0.1"\nkind: ontology\nid: acme.ontology\nclient_id: acme\n'
+        "status: active\nmodules:\n"
+        "  - {path: modules/m.yaml, id: acme.m}\n"
+        "projections:\n"
+        "  - {path: projections/p.yaml, id: acme.p}\n"
+    ),
+    "clients/acme/client.yaml": (
+        'schema_version: "0.1"\nkind: client\nid: acme\nname: Acme\nstatus: active\n'
+    ),
+    # One public-facing and one non-public entity, so the boolean column carries
+    # both stored integer values (1 and 0) that must normalize back to true/false.
+    "clients/acme/modules/m.yaml": (
+        'schema_version: "0.1"\nkind: ontology_module\nid: acme.m\nclient_id: acme\n'
+        "title: M\nstatus: active\n"
+        "entities:\n"
+        "  - {id: acme.m.pub, label: pub, entity_type: system_resource, public_facing: true}\n"
+        "  - {id: acme.m.priv, label: priv, entity_type: system_resource, public_facing: false}\n"
+    ),
+    "clients/acme/projections/p.yaml": (
+        'schema_version: "0.1"\nkind: projection\nid: acme.p\nclient_id: acme\n'
+        "status: active\nincludes:\n  modules: [acme.m]\n"
+    ),
+}
+
+
+def run_reporting_seam_probes(tmpdir: Path) -> dict[str, Any]:
+    """Prove the runner's row-type and skipped-check reporting close false-pass seams.
+
+    Two current-head reporting seams (Codex Reviewer A, fix-cycle exception):
+
+    1. **Boolean row type-sensitivity.** ``public_facing`` is stored as SQLite
+       integer 0/1; without normalization a selected row carries an ``int`` where
+       the registry (type-checked to require a real bool) carries a ``bool``, and
+       Python's ``False == 0`` would let ``_compare_rows`` pass a row whose
+       serialized expected (``false``) and actual (``0``) answers differ. Prove the
+       projected value is a real Python ``bool`` and that comparison is
+       JSON/type-sensitive (``false`` ≠ ``0``, ``true`` ≠ ``1``) while a genuine
+       boolean answer still matches.
+    2. **Explicit skipped-check representation.** ``--no-drift`` must represent the
+       drift regression as skipped — not as ``{"passed": True}`` (which reads as
+       "ran and held") — and the summary must say so rather than claim drift held.
+    """
+    root = tmpdir / "row-type-fixture"
+    for rel, text in _ROW_TYPE_FIXTURE.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    db = tmpdir / "row-type-fixture.sqlite"
+    e.export(root, db)
+
+    cases: list[dict[str, Any]] = []
+
+    def record(name: str, ok: bool, detail: Any) -> None:
+        cases.append({"name": name, "ok": ok, "detail": detail})
+
+    conn = sqlite3.connect(db)
+    try:
+        rows = run_query(conn, _scope_question(
+            "entities", filters={"entity_type": "system_resource"},
+            select=["entity_id", "public_facing"]))
+        all_bool = len(rows) == 2 and all(isinstance(r.get("public_facing"), bool) for r in rows)
+        record("public-facing-normalized-to-bool", all_bool, rows)
+        by_id = {r["entity_id"]: r.get("public_facing") for r in rows}
+        record("public-facing-true-false-values",
+               by_id.get("acme.m.pub") is True and by_id.get("acme.m.priv") is False, by_id)
+    finally:
+        conn.close()
+
+    # JSON/type-sensitive comparison controls: a real bool never matches the raw int.
+    record("compare-false-vs-int-zero-mismatch",
+           bool(_compare_rows([{"public_facing": False}], [{"public_facing": 0}])), None)
+    record("compare-true-vs-int-one-mismatch",
+           bool(_compare_rows([{"public_facing": True}], [{"public_facing": 1}])), None)
+    record("compare-false-vs-false-match",
+           _compare_rows([{"public_facing": False}], [{"public_facing": False}]) == [], None)
+    record("compare-true-vs-true-match",
+           _compare_rows([{"public_facing": True}], [{"public_facing": True}]) == [], None)
+
+    # Explicit skipped-check representation for --no-drift.
+    skipped = _skipped_drift()
+    record("no-drift-marked-skipped",
+           skipped.get("skipped") is True and skipped.get("passed") is True and skipped["cases"] == [],
+           skipped)
+    skip_line = _summary_checks_line(skipped)
+    record("skipped-summary-omits-drift-hold",
+           "SKIPPED (--no-drift)" in skip_line and "drift isolation +" not in skip_line, skip_line)
+    ran_line = _summary_checks_line({"passed": True, "cases": [{"isolated": True}]})
+    record("ran-summary-claims-drift-hold", ran_line.startswith("drift isolation +"), ran_line)
+
+    passed = all(c["ok"] for c in cases)
+    return {"passed": passed, "cases": cases}
+
+
+# --------------------------------------------------------------------------- #
 # Registry shape-validation regression (the malformed-registry negative case)
 # --------------------------------------------------------------------------- #
 def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
@@ -2493,6 +2706,7 @@ def _print_human(
     resolver: dict[str, Any],
     scope: dict[str, Any],
     path_shape: dict[str, Any],
+    reporting: dict[str, Any],
 ) -> None:
     print("Competency questions\n" + "=" * 20)
     for r in results:
@@ -2506,10 +2720,12 @@ def _print_human(
             for line in r["failures"]:
                 print("       - " + line)
     print("\nDrift-isolation regression\n" + "-" * 26)
+    if drift.get("skipped"):
+        print("[SKIP] drift-isolation regression skipped (--no-drift)")
     for case in drift["cases"]:
         mark = "PASS" if case["isolated"] else "FAIL"
-        print(f"[{mark}] {case['name']}: expected only {case['expected_failed']} to fail; "
-              f"actual failed = {case['actual_failed']}")
+        print(f"[{mark}] {case['name']}: expected only newly-failed {case['expected_failed']}; "
+              f"actual failed = {case['actual_failed']} (newly = {case.get('newly_failed', case['actual_failed'])})")
     print("\nRegistry shape-validation regression\n" + "-" * 36)
     for case in probes["cases"]:
         mark = "PASS" if case["ok"] else "FAIL"
@@ -2537,6 +2753,10 @@ def _print_human(
         print(f"[{mark}] {case['name']}")
     print("\nPath-shape regression (synthetic; parallel/cycle/branching/order)\n" + "-" * 64)
     for case in path_shape["cases"]:
+        mark = "PASS" if case["ok"] else "FAIL"
+        print(f"[{mark}] {case['name']}")
+    print("\nReporting-seam regression (synthetic; row-type + skipped-check)\n" + "-" * 62)
+    for case in reporting["cases"]:
         mark = "PASS" if case["ok"] else "FAIL"
         print(f"[{mark}] {case['name']}")
 
@@ -2584,6 +2804,9 @@ def run(argv: Optional[list] = None) -> int:
         # Path-shape regression (issue #41): parallel-edge dedup, cycle safety,
         # branching, and deterministic ordering (Codex Reviewer A parallel-edge finding).
         path_shape = run_path_shape_probes(tmpdir)
+        # Reporting-seam regression (fix-cycle exception): boolean row type-sensitivity
+        # and explicit --no-drift skipped-check representation (Codex Reviewer A).
+        reporting = run_reporting_seam_probes(tmpdir)
         try:
             exports = _build_scope_exports(root, questions, tmpdir)
             # DB-aware fail-early: an expected path endpoint whose actual
@@ -2594,7 +2817,7 @@ def run(argv: Optional[list] = None) -> int:
             print(json.dumps({"error": str(exc)}) if args.json else f"registry error: {exc}", file=sys.stderr)
             return 2
         results = _evaluate_with_exports(exports, questions)
-        drift = {"passed": True, "cases": []} if args.no_drift else run_drift_regression(exports, questions, tmpdir)
+        drift = _skipped_drift() if args.no_drift else run_drift_regression(exports, questions, tmpdir)
 
     failed_required = [r for r in results if r["status"] == "fail" and r["required"]]
     failed_optional = [r for r in results if r["status"] == "fail" and not r["required"]]
@@ -2606,6 +2829,7 @@ def run(argv: Optional[list] = None) -> int:
         or not resolver["passed"]
         or not scope["passed"]
         or not path_shape["passed"]
+        or not reporting["passed"]
     ) else 0
 
     if args.json:
@@ -2621,17 +2845,17 @@ def run(argv: Optional[list] = None) -> int:
                 "resolver_read_isolation": resolver,
                 "query_scope_isolation": scope,
                 "path_shape": path_shape,
+                "reporting_seams": reporting,
                 "exit_code": exit_code,
             },
             ensure_ascii=False,
             indent=2,
         ))
     else:
-        _print_human(results, drift, probes, loading, resolver, scope, path_shape)
+        _print_human(results, drift, probes, loading, resolver, scope, path_shape, reporting)
         if exit_code == 0:
             required_total = sum(1 for r in results if r["required"])
-            checks = ("drift isolation + registry shape + loading isolation + "
-                      "resolver-read isolation + query scope-isolation + path-shape checks hold")
+            checks = _summary_checks_line(drift)
             if failed_optional:
                 # A failed OPTIONAL question does not gate the exit code, but the
                 # summary must say so honestly — a blanket "all N passed" read via
@@ -2663,6 +2887,9 @@ def run(argv: Optional[list] = None) -> int:
             if not path_shape["passed"]:
                 bad = [c["name"] for c in path_shape["cases"] if not c["ok"]]
                 print(f"FAILED: path-shape regression (parallel/cycle/branching/order) did not hold: {bad}", file=sys.stderr)
+            if not reporting["passed"]:
+                bad = [c["name"] for c in reporting["cases"] if not c["ok"]]
+                print(f"FAILED: reporting-seam regression (row-type/skipped-check) did not hold: {bad}", file=sys.stderr)
     return exit_code
 
 

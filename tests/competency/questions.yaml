@@ -45,11 +45,17 @@ kind: competency_suite
 # needs both endpoints (`subject`,`object`) selected, and edge-confidence guards
 # apply only to a `path` query — so a safety assertion can never silently no-op.
 #
-# A `required: true` question is a POSITIVE coverage proof and MUST assert a
-# non-empty expected answer: an empty expect + universal `require_*` guards would
-# pass vacuously and count as proof of coverage while proving nothing. A
-# deliberately empty answer (a status-awareness / absence-style check) must be
-# `required: false` (non-gating, never cited as `covered` in docs/coverage.md). An
+# A `required: true` question is GATING: the runner must be able to answer it and
+# it MUST assert a NON-EMPTY expected answer (an empty expect + universal
+# `require_*` guards would pass vacuously). Being required makes it a positive,
+# non-empty assertion the runner gates on — it does NOT by itself make its family
+# `covered`. COVERAGE is the subset of required questions a `covered` cell in
+# docs/coverage.md cites BECAUSE the retrieved resources are evidence-backed. A
+# required question may instead assert a status-awareness SAFETY property over
+# draft/planning resources (e.g. `local-visibility-outcome-metrics` proves the
+# three draft metrics stay draft) — that is gating but NOT coverage proof, and its
+# family is `deferred / trigger-gated`, never `covered`. A deliberately EMPTY
+# answer (an absence-style check) must be `required: false` (non-gating). An
 # explicit absence-query DSL remains a deliberate future extension, not something
 # an empty required expectation may smuggle in. Every filter/expected operand must
 # also be the right TYPE for its column (string columns reject bool/number

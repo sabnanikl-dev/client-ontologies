@@ -68,14 +68,20 @@ repeated-node (cyclic) chain the simple-path traversal could never return, and �
 once the scoped export exists — rejects an expected endpoint whose actual
 `entity_type` contradicts the query's `start`/`end` constraint. So a misspelled
 predicate or an impossible chain is a usage error, not a silently-empty answer a
-required question reports as PASS. A `required` (coverage-proof) question must
-assert a **non-empty** expected answer — an empty required expectation with
-vacuous guards can never count as coverage; a deliberately empty answer must be
-`required: false` (a future explicit absence-query DSL stays out of scope). A
-failed **optional** question never gates the exit code but is reported honestly
-(the summary says "N required passed; K optional FAILED", never a blanket
-"all passed"). Parallel edges collapse to one path (the public representation
-carries no edge identity). Six regressions back it: **loading-isolation** and
+required question reports as PASS. A `required` question is **gating**: it must
+pass and assert a **non-empty** positive answer (an empty required expectation
+with vacuous guards can never gate on anything). Being required does NOT by itself
+make a family `covered` — `covered` (in `docs/coverage.md`) is the subset of
+required questions whose retrieved resources are evidence-backed; a required
+question may instead assert a status-awareness safety property over draft resources
+(gating, but not coverage). A deliberately empty answer must be `required: false`
+(a future explicit absence-query DSL stays out of scope). A failed **optional**
+question never gates the exit code but is reported honestly (the summary says
+"N required passed; K optional FAILED", never a blanket "all passed"), and drift
+isolation is measured against the clean baseline so an already-failing optional
+question never turns a drift case red. Parallel edges collapse to one path (the
+public representation carries no edge identity). Seven regressions back it:
+**loading-isolation** and
 **resolver-read isolation** (both instrument the ACTUAL `parse_yaml` calls — not
 just returned path lists — to prove no scoped load reaches another client or opens
 a module the projection excludes), **relationship/path scope-isolation** (a
@@ -86,8 +92,13 @@ fixture proves parallel edges dedupe to one path, a back-edge cannot revisit a n
 on a simple path, branching yields distinct paths, ordering is deterministic, and
 an expected endpoint's `entity_type` must match the query's constraint), **drift-
 isolation** (a single controlled mutation — a status, a projection membership, a
-relationship confidence, or a path-edge confidence — fails only the relevant
-question), and **registry shape-validation** (a malformed question — including a
+relationship confidence, or a path-edge confidence — **newly** fails only the
+relevant question, measured against the clean baseline so a failing optional stays
+non-gating), **reporting-seam** (a synthetic fixture proves a `public_facing`
+boolean stored as SQLite `0/1` normalizes back to a real `bool` and comparison is
+JSON/type-sensitive so `false` ≠ `0`, and that `--no-drift` represents the drift
+regression **explicitly as skipped** rather than silently "passed"), and
+**registry shape-validation** (a malformed question — including a
 non-string `id`/`client_id`/`projection`, a non-boolean `required`, a required
 question with an empty expected answer, a guard not bound to a selected output
 column, a non-scalar or wrong-typed filter operand, a typo'd
