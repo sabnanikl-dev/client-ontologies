@@ -1,0 +1,166 @@
+schema_version: "0.1"
+kind: competency_suite
+# ---------------------------------------------------------------------------
+# Competency-question registry (issue #31).
+#
+# This file is TEST METADATA under tests/. It is NOT a canonical ontology
+# `kind`, is NOT loaded as client truth, and its expected answers are NOT
+# evidence, canonical facts, or runtime authority. It records the business and
+# governance questions each client ontology must be able to answer, and the
+# deterministic, projection-scoped query that proves the answer against the
+# canonical runtime export (the temp SQLite that scripts/export_sqlite.py
+# builds). tests/run_competency.py is the runner; see its module docstring and
+# docs/examples.md (Example 7) for how to add a question.
+#
+# Expected values live ONLY here — never duplicated inside runtime/service
+# code — so a consumer (e.g. issue #19) can reuse this corpus to prove
+# YAML/SQLite answer equivalence without re-encoding the expectations.
+#
+# Query ops the runner understands (all projection-scoped, never cross-client):
+#   entities             — entity rows in the projection's scope, filtered/selected
+#   rules                — rule rows in the projection's scope, filtered/selected
+#   projection_resources — the projection's declared modules/entities/rules
+#
+# Guard types (safety / status / isolation boundaries):
+#   require_status     — every returned row's status must be in `statuses`
+#   forbid_status      — no returned row may have a status in `statuses`
+#   require_field_equals — every returned row's `field` must equal `value`
+#   forbid_id_prefix   — no returned id may start with any of `prefixes`
+# ---------------------------------------------------------------------------
+description: >
+  Deterministic competency questions for the live client ontologies. Each
+  question names a client and a target projection. The runner loads
+  projection/client-directed: for each question it builds a SCOPED export from
+  only the named client's manifest, client.yaml, the named projection, and the
+  module files that projection references — never another client's files and
+  never a module the projection does not pull into scope. On top of that scoped
+  export it also restricts each query's RESULTS through the named projection, so
+  no unrelated client and no unlisted-and-unreferenced module can appear in an
+  answer.
+
+questions:
+  # ---- Femme Events -------------------------------------------------------
+  - id: femme-events.competency.local-visibility-outcome-metrics
+    client_id: femme-events
+    projection: femme-events.local-seo
+    question: >
+      Which local-visibility outcome metrics are modeled, and what marks them so
+      a consumer cannot present them as recorded results?
+    rationale: >
+      Protects the reporting-consumer job: these metrics define WHAT to track,
+      not achieved numbers. They must stay draft with an unknown baseline until a
+      real read-only snapshot is captured and the entity is promoted with
+      evidence.
+    required: true
+    query:
+      op: entities
+      filters:
+        entity_type: metric
+      select: [entity_id, status, source_confidence, fields.baseline]
+    expect:
+      rows:
+        - {entity_id: femme-events.visibility.metric.gbp-calls, status: draft, source_confidence: draft, baseline: unknown}
+        - {entity_id: femme-events.visibility.metric.gbp-direction-requests, status: draft, source_confidence: draft, baseline: unknown}
+        - {entity_id: femme-events.visibility.metric.website-clicks, status: draft, source_confidence: draft, baseline: unknown}
+    guards:
+      # Safety: a draft metric must never look like a recorded/approved result.
+      - {type: forbid_status, statuses: [active, approved, owner_reviewed_internal, prohibited]}
+      # Safety: every baseline stays unknown (no implied achieved number).
+      - {type: require_field_equals, field: baseline, value: unknown}
+
+  - id: femme-events.competency.public-mutation-approval-rules
+    client_id: femme-events
+    projection: femme-events.local-seo
+    question: >
+      Which active rules require explicit approval before public local-visibility
+      account mutations or client-facing sends?
+    rationale: >
+      Protects the automation-consumer job: drafting/reconciling is allowed, but
+      GBP/directory/review/social mutations and client-facing sends stay
+      approval-gated. The ontology names the rule; it grants no live authority.
+    required: true
+    query:
+      op: rules
+      filters:
+        status: active
+        rule_type: approval_required
+      select: [rule_id, status, severity, rule_type]
+    expect:
+      rows:
+        - {rule_id: femme-events.visibility.public-account-mutations-require-approval, status: active, severity: approval_required, rule_type: approval_required}
+        - {rule_id: femme-events.operations.draft-before-public-use, status: active, severity: approval_required, rule_type: approval_required}
+        - {rule_id: femme-events.operations.no-client-facing-send-without-approval, status: active, severity: blocking, rule_type: approval_required}
+    guards:
+      # Only enforceable (active) governance rules may answer this question.
+      - {type: require_status, statuses: [active]}
+      # Cross-client isolation: no JMD rule may leak into a Femme answer.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # ---- JMD Menswear -------------------------------------------------------
+  - id: jmd-menswear.competency.ecommerce-and-live-change-guardrails
+    client_id: jmd-menswear
+    projection: jmd-menswear.website-build
+    question: >
+      Which active rules prohibit e-commerce language and unauthorized live
+      changes for the JMD website workstream?
+    rationale: >
+      Protects the website-builder job: JMD is a showroom, not e-commerce, and no
+      deploy/DNS/hosting/public change happens without Karan approval. The builder
+      needs these enforceable guardrails with correct status and severity.
+    required: true
+    query:
+      op: rules
+      filters:
+        status: active
+        rule_type: [prohibited_claim, approval_required]
+      select: [rule_id, status, severity, rule_type]
+    expect:
+      rows:
+        - {rule_id: jmd-menswear.website.showroom-not-ecommerce, status: active, severity: blocking, rule_type: prohibited_claim}
+        - {rule_id: jmd-menswear.website.no-live-changes-without-approval, status: active, severity: approval_required, rule_type: approval_required}
+        - {rule_id: jmd-menswear.operations.no-live-account-or-deploy-without-approval, status: active, severity: blocking, rule_type: approval_required}
+    guards:
+      # Only enforceable (active) guardrails answer this question.
+      - {type: require_status, statuses: [active]}
+      # Scope isolation: the website-build projection excludes the inventory
+      # module, so no inventory rule (and no other client) may appear.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear.inventory, femme-events]}
+
+  - id: jmd-menswear.competency.inventory-workflow-resources
+    client_id: jmd-menswear
+    projection: jmd-menswear.inventory-workflow
+    question: >
+      Which projection resources are needed for the inventory-image workflow
+      without importing unrelated client or brand context?
+    rationale: >
+      Protects the automation-consumer job: a Drive→Sanity showroom workflow
+      should load exactly the curated inventory/website/operations resources this
+      projection declares, not the whole client folder or brand voice.
+    required: true
+    query:
+      op: projection_resources
+    expect:
+      resources:
+        modules:
+          - jmd-menswear.inventory-images
+          - jmd-menswear.operations
+          - jmd-menswear.website
+        entities:
+          - jmd-menswear.inventory.approval-ledger-entry
+          - jmd-menswear.inventory.drive-folder
+          - jmd-menswear.inventory.image
+          - jmd-menswear.inventory.sanity-asset
+          - jmd-menswear.inventory.showroom-item
+          - jmd-menswear.inventory.sync-run
+          - jmd-menswear.operations.approval-boundary
+          - jmd-menswear.website.showroom-card
+        rules:
+          - jmd-menswear.inventory.human-approval-required-for-mvp
+          - jmd-menswear.inventory.raw-uploads-do-not-publish
+          - jmd-menswear.inventory.website-reads-sanity-not-drive
+          - jmd-menswear.operations.no-live-account-or-deploy-without-approval
+          - jmd-menswear.website.showroom-not-ecommerce
+    guards:
+      # Isolation: the inventory workflow must not pull in brand voice or any
+      # other client's resources.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear.brand, femme-events]}

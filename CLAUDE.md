@@ -24,9 +24,35 @@ python3 scripts/validate_ontology.py                                  # canonica
 python3 scripts/export_sqlite.py --output build/client-ontologies.sqlite   # runtime projection
 python3 tests/run_fixtures.py    # every invalid fixture must FAIL for its reason
 python3 tests/run_export.py      # the valid fixture must validate + export cleanly
+python3 tests/run_competency.py  # each client still answers its competency questions (outcome regression)
 python3 tests/run_checks.py      # the machine_check guardrail engine matches + exits correctly
 python3 tests/run_evidence.py    # the evidence-health checker hashes + exits correctly
 ```
+
+`tests/run_competency.py` is the outcome-oriented suite: it reads the test-owned
+registry `tests/competency/questions.yaml` (NOT a canonical `kind`; never loaded
+as client truth) and proves each client ontology still answers its
+business/governance competency questions. Loading is **projection/client-directed**
+(issue #31 AC): for each question it builds a throwaway SCOPED export through the
+shared loader/export path (never the repo's `build/`) from only the named
+client's manifest, `client.yaml`, the named projection, and the modules that
+projection references — never another client's files and never a module the
+projection excludes (`resolve_scope_paths` computes the file set — widening to
+the full single-client module set rather than scanning-and-excluding when a
+reference points outside `includes.modules`; `export_sqlite.export(..., paths=...)`
+reuses the same `parse_yaml`/table shapes and rejects any path outside `root`).
+Results are then further scoped through the named projection. Four regressions
+back it: **loading-isolation** and **resolver-read isolation** (both instrument
+the ACTUAL `parse_yaml` calls — not just returned path lists — to prove no scoped
+load reaches another client or opens a module the projection excludes),
+**drift-isolation** (a single controlled mutation fails only the relevant
+question), and **registry shape-validation** (a malformed question — including a
+non-string `id`/`client_id`/`projection`, a non-boolean `required`, a guard not
+bound to a selected output column, or a non-scalar filter operand — is rejected
+as a usage error / exit 2 before any answer is trusted). Expected answers live only in the registry, so a consumer
+(issue #19) can reuse the corpus via `evaluate_suite(db_path, questions)` to
+prove YAML/SQLite parity without re-encoding them. It needs no model, network,
+API credential, or live client system.
 
 `scripts/check_rules.py` is the runtime guardrail engine (library + CLI, stdlib
 only): it runs a client's `machine_check` rules against copy

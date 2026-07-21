@@ -37,6 +37,13 @@ jobs:
       - name: Run valid-fixture validate + export tests
         run: python3 tests/run_export.py
 
+      # Outcome-oriented: build a throwaway SQLite export and prove each client
+      # ontology still answers its business/governance competency questions
+      # (and that a controlled semantic drift isolates to one question). Runs
+      # after validate/export so structural failures surface first.
+      - name: Run competency-question suite
+        run: python3 tests/run_competency.py
+
       - name: Run machine-check rule engine tests
         run: python3 tests/run_checks.py
 

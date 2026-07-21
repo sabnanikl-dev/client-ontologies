@@ -261,3 +261,35 @@ python3 scripts/check_rules.py --client femme-events --text "We are a world-clas
 - `draft`/`proposed` rules are advisory only (`"advisory": true`): they are reported but **never** change the exit code, whatever their severity.
 
 Consumer behavior: this engine is deterministic (case-insensitive substring for term lists, `re.search` for `regex_policy`) — it is a copy/safety guardrail, not an approval to publish. A clean run does not grant live-account or publish authority; the approval rules still govern the action.
+
+## Example 7 — competency questions: proving a consumer still gets the right answer
+
+Goal: guarantee that a schema-valid change cannot silently break the business/governance question a client ontology exists to answer. Structural validation asks *"is this ontology well-formed?"*; the competency suite asks *"can a consumer still get the correct, status-aware answer?"*.
+
+`tests/competency/questions.yaml` is a **test-owned registry** — not a canonical ontology `kind`, not client evidence, not runtime authority. Each question names a client and a target projection, a deterministic projection-scoped query, the expected answer, and safety/status guards. `tests/run_competency.py` builds a throwaway SQLite export (via the shared loader/export path, never the repo's `build/`) and checks every answer.
+
+Run it:
+
+```bash
+python3 tests/run_competency.py           # human report
+python3 tests/run_competency.py --json     # machine-readable results
+```
+
+What the four live questions protect:
+
+- **Femme metrics** (`femme-events.local-seo`): the three GBP outcome metrics stay `status: draft` with `baseline: unknown`, so a reporting consumer cannot present them as recorded results.
+- **Femme approvals** (`femme-events.local-seo`): the active approval-gated rules that govern public account mutations and client-facing sends.
+- **JMD guardrails** (`jmd-menswear.website-build`): the active rules that prohibit e-commerce language and unauthorized live changes, with correct status/severity.
+- **JMD inventory resources** (`jmd-menswear.inventory-workflow`): exactly the projection's declared modules/entities/rules — no brand voice, no other client.
+
+Loading is **projection/client-directed**: for each question the runner reads only the named client's manifest, `client.yaml`, the named projection, and the module files that projection references (`includes.modules`; when a reference points at a module outside `includes.modules` the scope widens to the full single-client module set rather than scanning-and-excluding other modules) — it never parses another client's files and never parses a module the projection excludes, so a Femme question reads only Femme files and a projection that excludes a module never reads it. On top of that scoped export each query's **results** are further scoped **through the named projection** (a row is in scope only if its module is in `includes.modules` or its id is named/`.*`-matched in `includes.entities`/`includes.rules`), so no other client's rows and no unlisted-and-unreferenced module's rows can appear in an answer. Four deterministic regressions back this: a **loading-isolation** case and a synthetic **resolver-read isolation** case — both instrumenting the runner's **actual `parse_yaml` calls** (not just the returned path list) — prove no cross-client file and no excluded-module file is opened, even transiently during reference resolution; a **drift-isolation** case mutates one point of a copy of a scoped export (a metric's status; a projection's membership) and proves the change fails **only** the relevant question with an expected-vs-actual diagnostic; and a **registry shape-validation** case proves a malformed question — a non-string `id`/`client_id`/`projection`, a missing or non-string human-readable `question`/`rationale`, an unknown question-level key (a misspelled `gaurds:` or any other stray key, except a deliberate `x_` extension), a non-boolean `required`, an unknown select column, a misspelled guard operand, a guard not bound to a selected output column, a non-scalar filter operand, a wrong-typed expect payload — is rejected as a usage error (exit 2) before any answer is trusted. `export(..., paths=...)` also rejects any path outside `root` before parsing and always closes its SQLite connection.
+
+### Adding a competency question
+
+1. Pick the client and the **projection** that a real consumer would load for the job.
+2. Add an entry to `tests/competency/questions.yaml` with a stable `id`, `client_id`, `projection`, human-readable `question`, `rationale` (the consumer job it protects), a `query` (`entities`, `rules`, or `projection_resources` with `filters`/`select`), the `expect`ed rows/resources, and `guards` for the status/safety/isolation boundary.
+3. Keep expected values **only** in the registry — never copy them into runtime/service code. Run `python3 tests/run_competency.py`.
+
+### When a schema/module/projection PR must update the corpus
+
+Update `tests/competency/questions.yaml` in the same PR when your change alters a modeled answer: adding/removing/retyping an entity or rule a question returns, changing a rule's `status`/`severity`/`rule_type`, moving a metric's `status`/`baseline`, or changing a projection's `includes` membership. If the competency suite fails, either the change regressed a consumer answer (fix the change) or the answer legitimately moved (update the expected value and say so in the PR). Competency questions are **test requirements — not evidence, canonical truth, or authority**.
