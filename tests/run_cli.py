@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -154,9 +155,22 @@ def test_error_unavailable_sqlite() -> None:
 
 
 def test_error_malformed_args() -> None:
-    # Unknown flag -> argparse usage error, exit 2.
-    code, _, _ = run_cli(["context", "--client", "femme-events", "--bogus-flag", "x"])
+    # Unknown flag -> argparse usage error mapped to the STRUCTURED {"error":...}
+    # contract, exit 2 (Codex Reviewer A / Integration Auditor: argparse must not
+    # terminate with free-form usage text a machine consumer cannot parse).
+    code, out, err = run_cli(["context", "--client", "femme-events", "--bogus-flag", "x"])
     check(code == 2, f"malformed args must exit 2, got {code}")
+    check(out == "", "malformed args must print nothing on stdout")
+    parsed = json.loads(err)  # must be parseable JSON, not argparse usage text
+    check("error" in parsed, f"malformed args must emit structured {{'error':...}}, got {err!r}")
+    # A missing required subcommand is also structured.
+    code_sub, _, err_sub = run_cli([])
+    check(code_sub == 2, f"missing subcommand must exit 2, got {code_sub}")
+    check("error" in json.loads(err_sub), "missing subcommand must be structured")
+    # A missing required option (--client) is structured too.
+    code_req, _, err_req = run_cli(["context", "--root", str(REPO_ROOT)])
+    check(code_req == 2, f"missing --client must exit 2, got {code_req}")
+    check("error" in json.loads(err_req), "missing required option must be structured")
     # Two text sources -> structured ServiceError, exit 2.
     code2, _, err2 = run_cli(
         ["check-copy", "--client", "femme-events", "--text", "a", "--file", "b", "--root", str(REPO_ROOT)]
@@ -176,6 +190,217 @@ def test_error_backend_drift() -> None:
         code, _, err = run_cli(["list-clients", "--source", "sqlite", "--sqlite-path", str(bogus)])
         check(code == 2, f"backend drift must exit 2, got {code}")
         check("error" in json.loads(err), "backend drift must be structured")
+
+
+def test_error_unknown_workstream_no_bypass() -> None:
+    """A misspelled --workstream must fail closed, never silently select zero
+    rules and let a blocking check_copy report a clean pass (Codex Reviewer A)."""
+    text = "Add to cart today"
+    # Sanity: with NO scope, this trips the blocking showroom-not-ecommerce rule.
+    code_ok, out_ok, _ = run_cli(
+        ["check-copy", "--client", "jmd-menswear", "--text", text, "--root", str(REPO_ROOT)]
+    )
+    ids = [v["rule_id"] for v in json.loads(out_ok)["violations"]]
+    check(
+        "jmd-menswear.website.showroom-not-ecommerce" in ids and code_ok == 1,
+        "precondition: unscoped check must flag the blocking rule and exit 1",
+    )
+    # A misspelled workstream must NOT quietly pass — it must be a structured exit 2.
+    code, out, err = run_cli(
+        ["check-copy", "--client", "jmd-menswear", "--workstream", "definitely-not-a-workstream",
+         "--text", text, "--root", str(REPO_ROOT)]
+    )
+    check(code == 2, f"unknown workstream must exit 2 (not a silent pass), got {code}")
+    check(out == "", "unknown workstream must not print a clean result on stdout")
+    check("error" in json.loads(err), "unknown workstream must be structured")
+    # list-rules must reject an unknown workstream the same way.
+    code_r, _, err_r = run_cli(
+        ["rules", "--client", "jmd-menswear", "--workstream", "nope", "--root", str(REPO_ROOT)]
+    )
+    check(code_r == 2, f"list-rules unknown workstream must exit 2, got {code_r}")
+    check("error" in json.loads(err_r), "list-rules unknown workstream must be structured")
+    # A REAL workstream still works (no over-rejection).
+    code_g, _, _ = run_cli(
+        ["check-copy", "--client", "jmd-menswear", "--workstream", "website",
+         "--text", text, "--root", str(REPO_ROOT)]
+    )
+    check(code_g == 1, f"real workstream 'website' must still enforce the blocking rule, got {code_g}")
+
+
+def _foreign_partial_sqlite(path: Path) -> None:
+    """Reviewer A's exact repro: a schema-*compatible* but INCOMPLETE database with
+    only the three tables the old loader queried, a forged JMD client, and a
+    website module whose raw_json carries no rules. The old loader accepted this
+    and reported ``violations: [], exit_code: 0`` for blocking copy."""
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE clients (client_id TEXT PRIMARY KEY, raw_json TEXT)")
+    conn.execute("CREATE TABLE modules (module_id TEXT PRIMARY KEY, client_id TEXT, raw_json TEXT)")
+    conn.execute("CREATE TABLE projections (projection_id TEXT PRIMARY KEY, client_id TEXT, raw_json TEXT)")
+    conn.execute(
+        "INSERT INTO clients VALUES (?, ?)",
+        ("jmd-menswear", json.dumps({"kind": "client", "id": "jmd-menswear", "name": "JMD"})),
+    )
+    conn.execute(
+        "INSERT INTO modules VALUES (?, ?, ?)",
+        ("jmd-menswear.website", "jmd-menswear",
+         json.dumps({"kind": "ontology_module", "id": "jmd-menswear.website",
+                     "client_id": "jmd-menswear", "rules": []})),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_error_foreign_partial_sqlite_no_bypass() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        foreign = Path(tmp) / "foreign.sqlite"
+        _foreign_partial_sqlite(foreign)
+        code, out, err = run_cli(
+            ["check-copy", "--client", "jmd-menswear", "--text", "Add to cart today",
+             "--source", "sqlite", "--sqlite-path", str(foreign)]
+        )
+        check(code == 2, f"foreign/partial sqlite must fail closed with exit 2, got {code} (out={out!r})")
+        check("error" in json.loads(err), "foreign/partial sqlite must be structured")
+
+
+def test_error_drifted_sqlite_suppressed_rule(canonical_db: Path) -> None:
+    """Schema-compatible DRIFT (Codex Reviewer B): a genuine full export whose
+    module raw_json was emptied of its rules must fail closed, because the
+    normalized `rules` table no longer matches the module documents the service
+    reads — otherwise a tampered snapshot could suppress a blocking rule."""
+    with tempfile.TemporaryDirectory() as tmp:
+        drifted = Path(tmp) / "drifted.sqlite"
+        shutil.copyfile(canonical_db, drifted)
+        conn = sqlite3.connect(drifted)
+        try:
+            row = conn.execute(
+                "SELECT raw_json FROM modules WHERE module_id = ?", ("jmd-menswear.website",)
+            ).fetchone()
+            doc = json.loads(row[0])
+            doc["rules"] = []  # strip the blocking showroom-not-ecommerce rule
+            conn.execute(
+                "UPDATE modules SET raw_json = ? WHERE module_id = ?",
+                (json.dumps(doc), "jmd-menswear.website"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        code, out, err = run_cli(
+            ["check-copy", "--client", "jmd-menswear", "--text", "Add to cart today",
+             "--source", "sqlite", "--sqlite-path", str(drifted)]
+        )
+        check(code == 2, f"drifted export must fail closed with exit 2, got {code} (out={out!r})")
+        check("error" in json.loads(err), "drifted export must be structured")
+
+
+def test_error_forged_rawid_mismatch(canonical_db: Path) -> None:
+    """A row whose primary id disagrees with its raw_json id is a tampered/drifted
+    export and must fail closed (row-id/raw-id agreement)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        forged = Path(tmp) / "forged.sqlite"
+        shutil.copyfile(canonical_db, forged)
+        conn = sqlite3.connect(forged)
+        try:
+            row = conn.execute(
+                "SELECT raw_json FROM clients WHERE client_id = ?", ("jmd-menswear",)
+            ).fetchone()
+            doc = json.loads(row[0])
+            doc["id"] = "not-jmd-menswear"  # raw id no longer matches the PK
+            conn.execute(
+                "UPDATE clients SET raw_json = ? WHERE client_id = ?",
+                (json.dumps(doc), "jmd-menswear"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        code, _, err = run_cli(["list-clients", "--source", "sqlite", "--sqlite-path", str(forged)])
+        check(code == 2, f"row-id/raw-id mismatch must fail closed with exit 2, got {code}")
+        check("error" in json.loads(err), "row-id/raw-id mismatch must be structured")
+
+
+def test_error_yaml_root_not_a_repo() -> None:
+    """The default `--source yaml --root .` pointed at a non-checkout (e.g. an
+    installed consumer's own repo) must fail closed, not return an empty and
+    vacuously clean result (Codex Reviewer A/B)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        code, out, err = run_cli(["list-clients", "--root", tmp])
+        check(code == 2, f"non-checkout root must exit 2, got {code} (out={out!r})")
+        check("error" in json.loads(err), "non-checkout root must be structured")
+
+
+def test_sqlite_provenance_not_ambient(ds_yaml: svc.Dataset, ds_sqlite: svc.Dataset) -> None:
+    """SQLite `_meta.repo_commit` must never be the ambient working directory's Git
+    HEAD — the export carries no provenance, so it must be null (Codex Reviewer
+    A/B, Integration Auditor). The YAML backend derives it from its real root."""
+    check(
+        svc._meta(ds_sqlite)["repo_commit"] is None,
+        "sqlite repo_commit must be null (no ambient-cwd git leakage)",
+    )
+    # The YAML dataset has a concrete root; its commit (if git is present) comes
+    # from that root, and must equal the ontology checkout HEAD — never derived
+    # from a rootless dataset.
+    yaml_commit = svc._meta(ds_yaml)["repo_commit"]
+    check(
+        yaml_commit is None or (isinstance(yaml_commit, str) and len(yaml_commit) == 40),
+        f"yaml repo_commit must be a real commit or null, got {yaml_commit!r}",
+    )
+
+
+def test_installed_consumer_snapshot_contract(canonical_db: Path) -> None:
+    """Prove the documented installed-consumer contract from OUTSIDE the ontology
+    repo (Codex Reviewer B): run the console command's module in a foreign working
+    directory and show (a) a pinned SQLite snapshot enforces the blocking rule with
+    exit 1 and needs no `clients/` checkout and no Ruby, and (b) the ambient
+    `--source yaml --root .` default fails closed there instead of silently
+    passing."""
+    import os
+    import subprocess
+
+    cli_path = REPO_ROOT / "scripts" / "ontology_cli.py"
+    with tempfile.TemporaryDirectory() as consumer:
+        # Copy the pinned snapshot into the consumer repo (as a SessionStart hook
+        # would), then run the CLI with the consumer dir as cwd — no ontology
+        # checkout present.
+        pinned = Path(consumer) / "ontology.sqlite"
+        shutil.copyfile(canonical_db, pinned)
+        env = {**os.environ, "PATH": os.environ.get("PATH", "")}
+        # Force the sqlite backend to prove no Ruby is needed even if ruby exists;
+        # blank PATH would also disable git, which is fine for a sqlite read.
+        env["ONTOLOGY_TEST_MARKER"] = "1"
+
+        # (a) Pinned-snapshot enforcement: blocking violation -> exit 1.
+        enforce = subprocess.run(
+            [sys.executable, str(cli_path), "check-copy", "--client", "jmd-menswear",
+             "--source", "sqlite", "--sqlite-path", str(pinned), "--text", "Add to cart today"],
+            cwd=consumer, capture_output=True, text=True, env=env,
+        )
+        check(
+            enforce.returncode == 1,
+            f"pinned-snapshot check must exit 1 from a consumer repo, got {enforce.returncode} "
+            f"(stderr={enforce.stderr!r})",
+        )
+        ids = [v["rule_id"] for v in json.loads(enforce.stdout)["violations"]]
+        check(
+            "jmd-menswear.website.showroom-not-ecommerce" in ids,
+            f"pinned-snapshot check must flag the blocking rule, got {ids}",
+        )
+        # The provenance stamp must NOT borrow the consumer repo's git state.
+        check(
+            json.loads(enforce.stdout)["_meta"]["repo_commit"] is None,
+            "pinned-snapshot response must carry null repo_commit (no consumer-repo leakage)",
+        )
+
+        # (b) Default yaml/--root . in a consumer repo (no clients/) fails closed.
+        ambient = subprocess.run(
+            [sys.executable, str(cli_path), "check-copy", "--client", "jmd-menswear",
+             "--text", "Add to cart today"],
+            cwd=consumer, capture_output=True, text=True, env=env,
+        )
+        check(
+            ambient.returncode == 2,
+            f"ambient yaml/--root . in a consumer repo must fail closed with exit 2, "
+            f"got {ambient.returncode} (stdout={ambient.stdout!r})",
+        )
+        check("error" in json.loads(ambient.stderr), "ambient failure must be structured")
 
 
 # --------------------------------------------------------------------------- #
@@ -254,22 +479,34 @@ def _row_for(op: str, resource: dict[str, Any]) -> dict[str, Any]:
 
 
 def service_answer(ds: svc.Dataset, question: dict[str, Any]) -> Any:
-    """Answer a competency question purely through the runtime service, then apply
-    the runner's OWN filter/select/normalize helpers — so no query semantics and
-    no expected values are re-encoded here."""
+    """Answer a competency question through the PUBLIC runtime operation a consumer
+    calls (``get_projection``), then apply the runner's OWN filter/select/normalize
+    helpers — so no query semantics and no expected values are re-encoded here.
+
+    Routing through ``get_projection`` (not private helpers) is deliberate: it
+    means a regression in the public operation's projection resolution, scope
+    isolation, or resource views is caught by the competency parity check, instead
+    of the test quietly re-deriving the answer around the operation it claims to
+    verify (Integration Auditor finding 4)."""
     query = question["query"]
     op = query["op"]
     client_id, projection_id = question["client_id"], question["projection"]
-    projection = svc._require_projection(ds, projection_id, client_id)
-    includes = projection.get("includes") or {}
+    # PUBLIC operation. get_projection fails closed on an unknown projection and
+    # resolves only within the projection's own client; assert that client matches
+    # the question so cross-client resolution can never masquerade as a pass.
+    resolved = svc.get_projection(ds, projection_id)
+    check(
+        resolved["client_id"] == client_id,
+        f"get_projection({projection_id}) client {resolved['client_id']!r} != question client {client_id!r}",
+    )
     if op == "projection_resources":
+        # get_projection already returns the includes sorted (its public contract).
         return {
-            "modules": sorted(includes.get("modules") or []),
-            "entities": sorted(includes.get("entities") or []),
-            "rules": sorted(includes.get("rules") or []),
+            "modules": resolved["includes"]["modules"],
+            "entities": resolved["includes"]["entities"],
+            "rules": resolved["includes"]["rules"],
         }
-    entities, rules = svc.resolve_scope(ds, client_id, projection_id)
-    source = entities if op == "entities" else rules
+    source = resolved["resolved"]["entities"] if op == "entities" else resolved["resolved"]["rules"]
     rows = [_row_for(op, r) for r in source]
     filters = query.get("filters") or {}
     select = query.get("select") or []
@@ -440,6 +677,13 @@ def main() -> int:
             ("error_unavailable_sqlite", lambda: test_error_unavailable_sqlite()),
             ("error_malformed_args", lambda: test_error_malformed_args()),
             ("error_backend_drift", lambda: test_error_backend_drift()),
+            ("error_unknown_workstream_no_bypass", lambda: test_error_unknown_workstream_no_bypass()),
+            ("error_foreign_partial_sqlite_no_bypass", lambda: test_error_foreign_partial_sqlite_no_bypass()),
+            ("error_drifted_sqlite_suppressed_rule", lambda: test_error_drifted_sqlite_suppressed_rule(canonical_db)),
+            ("error_forged_rawid_mismatch", lambda: test_error_forged_rawid_mismatch(canonical_db)),
+            ("error_yaml_root_not_a_repo", lambda: test_error_yaml_root_not_a_repo()),
+            ("sqlite_provenance_not_ambient", lambda: test_sqlite_provenance_not_ambient(ds_yaml, ds_sqlite)),
+            ("installed_consumer_snapshot_contract", lambda: test_installed_consumer_snapshot_contract(canonical_db)),
             ("backend_parity", lambda: test_backend_parity(ds_yaml, ds_sqlite)),
             ("projection_isolation", lambda: test_projection_isolation(ds_yaml)),
             ("competency_parity", lambda: test_competency_parity(ds_yaml, ds_sqlite, canonical_db)),
