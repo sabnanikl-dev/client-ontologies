@@ -20,12 +20,30 @@ kind: competency_suite
 #   entities             — entity rows in the projection's scope, filtered/selected
 #   rules                — rule rows in the projection's scope, filtered/selected
 #   projection_resources — the projection's declared modules/entities/rules
+#   relationships        — subject/predicate/object edge rows in scope (issue #41);
+#                          an edge surfaces ONLY if its module is in scope AND both
+#                          endpoints are in-scope entities (endpoint isolation)
+#   path                 — deliberately bounded, deterministic multi-hop traversal
+#                          (issue #41); names explicit start/end constraints,
+#                          allowed `predicates`, and `min_hops`/`max_hops`. Simple
+#                          paths only, capped; every node/edge stays in scope. This
+#                          is NOT a general graph-query language (no GraphRAG,
+#                          embeddings, model grading, or second store).
 #
 # Guard types (safety / status / isolation boundaries):
-#   require_status     — every returned row's status must be in `statuses`
-#   forbid_status      — no returned row may have a status in `statuses`
+#   require_status       — every returned row's status must be in `statuses`
+#   forbid_status        — no returned row may have a status in `statuses`
 #   require_field_equals — every returned row's `field` must equal `value`
-#   forbid_id_prefix   — no returned id may start with any of `prefixes`
+#   require_field_in     — every returned row's `field` must be in `values`
+#   forbid_field_in      — no returned row's `field` may be in `values`
+#   forbid_id_prefix     — no returned id/endpoint/node may start with any `prefixes`
+#   require_edge_confidence_in — every path edge's source_confidence must be in `values`
+#   forbid_edge_confidence_in  — no path edge's source_confidence may be in `values`
+#
+# Each guard is bound to the query's output shape: a status guard needs `status`
+# selected, a field guard needs its field selected, a relationship isolation guard
+# needs both endpoints (`subject`,`object`) selected, and edge-confidence guards
+# apply only to a `path` query — so a safety assertion can never silently no-op.
 # ---------------------------------------------------------------------------
 description: >
   Deterministic competency questions for the live client ontologies. Each
@@ -164,3 +182,157 @@ questions:
       # Isolation: the inventory workflow must not pull in brand voice or any
       # other client's resources.
       - {type: forbid_id_prefix, prefixes: [jmd-menswear.brand, femme-events]}
+
+  # ---- issue #41: relationship-backed + technical/data-flow + multi-hop -----
+
+  # Femme — relationship-backed BUSINESS question. Proves the Google Business
+  # Profile is grounded in an owner-reviewed business fact that in turn targets a
+  # service area (subject/predicate/object answer), and that both edges are
+  # recorded (owner_reviewed), not draft guesswork.
+  - id: femme-events.competency.gbp-grounded-in-owner-reviewed-fact
+    client_id: femme-events
+    projection: femme-events.local-seo
+    question: >
+      How is the Google Business Profile grounded — which owner-reviewed business
+      fact does it use, and what service area does that fact target?
+    rationale: >
+      Protects the local-visibility consumer job: public GBP work must trace to an
+      owner-reviewed business fact and its service area, not an unverified guess.
+      The relationship answer names that grounding chain and proves it is recorded.
+    required: true
+    query:
+      op: relationships
+      filters:
+        predicate: [uses, targets]
+        source_confidence: owner_reviewed
+      select: [subject, predicate, object, source_confidence]
+    expect:
+      rows:
+        - {subject: femme-events.visibility.google-business-profile, predicate: uses, object: femme-events.visibility.business-fact, source_confidence: owner_reviewed}
+        - {subject: femme-events.visibility.business-fact, predicate: targets, object: femme-events.visibility.service-area, source_confidence: owner_reviewed}
+    guards:
+      # Status/confidence: these grounding edges must be recorded, never draft.
+      - {type: require_field_in, field: source_confidence, values: [owner_reviewed, verified]}
+      # Cross-client isolation on both endpoints.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # Femme — TECHNICAL system/data-flow question. Which outcome metrics measure the
+  # Google Business Profile system, and are those measurement flows still
+  # planning-only (draft) rather than verified current architecture?
+  - id: femme-events.competency.outcome-metrics-measure-gbp-system
+    client_id: femme-events
+    projection: femme-events.local-seo
+    question: >
+      Which outcome metrics measure the Google Business Profile system, and do
+      those measurement data-flows remain planning-only?
+    rationale: >
+      Protects the reporting-consumer job: the metric→system measurement edges
+      define WHAT will be measured, not achieved numbers. They must stay draft so a
+      consumer cannot present a planned data-flow as verified live instrumentation.
+    required: true
+    query:
+      op: relationships
+      filters:
+        predicate: measures
+      select: [subject, predicate, object, source_confidence]
+    expect:
+      rows:
+        - {subject: femme-events.visibility.metric.gbp-calls, predicate: measures, object: femme-events.visibility.google-business-profile, source_confidence: draft}
+        - {subject: femme-events.visibility.metric.gbp-direction-requests, predicate: measures, object: femme-events.visibility.google-business-profile, source_confidence: draft}
+        - {subject: femme-events.visibility.metric.website-clicks, predicate: measures, object: femme-events.visibility.google-business-profile, source_confidence: draft}
+    guards:
+      # Status-awareness: every measurement flow stays draft (planning-only). A
+      # promotion to verified must flip this question, never pass silently.
+      - {type: require_field_in, field: source_confidence, values: [draft]}
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # Femme — bounded MULTI-HOP data-flow path. CMS content renders into the site,
+  # which contains the public service package: a verified two-hop content flow.
+  - id: femme-events.competency.cms-content-renders-to-service-package-path
+    client_id: femme-events
+    projection: femme-events.website-build
+    question: >
+      Along the verified website content flow, how does CMS content reach the
+      public service package (which node does it render into, and what does that
+      node contain)?
+    rationale: >
+      Protects the website-builder job: the builder must follow the real content
+      pipeline (CMS → site → service package) rather than guess where copy lands.
+      The bounded path proves the two-hop flow and that every edge is verified.
+    required: true
+    query:
+      op: path
+      start: {id: femme-events.website.cms-content}
+      end: {entity_type: business_object}
+      predicates: [renders_in, contains]
+      min_hops: 2
+      max_hops: 2
+    expect:
+      paths:
+        - chain: [femme-events.website.cms-content, renders_in, femme-events.website.site, contains, femme-events.website.service-package]
+          confidences: [verified, verified]
+    guards:
+      # This IS verified current architecture — every edge must be verified.
+      - {type: require_edge_confidence_in, values: [verified]}
+      # Cross-client isolation across every traversed node.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # JMD — relationship-backed BUSINESS/operating question. The approval boundary
+  # governs the public showroom website: a verified governance edge.
+  - id: jmd-menswear.competency.approval-boundary-governs-site
+    client_id: jmd-menswear
+    projection: jmd-menswear.website-build
+    question: >
+      Which operating boundary governs the public showroom website, and is that
+      governance relationship verified?
+    rationale: >
+      Protects the website-builder job: no live/public change happens outside the
+      approval boundary. The relationship answer names the boundary that governs
+      the site and proves the constraint is verified, not a draft proposal.
+    required: true
+    query:
+      op: relationships
+      filters:
+        predicate: governs
+      select: [subject, predicate, object, source_confidence]
+    expect:
+      rows:
+        - {subject: jmd-menswear.operations.approval-boundary, predicate: governs, object: jmd-menswear.website.site, source_confidence: verified}
+    guards:
+      - {type: require_field_in, field: source_confidence, values: [verified]}
+      # Isolation: no inventory endpoint and no other client may appear.
+      - {type: forbid_id_prefix, prefixes: [femme-events, jmd-menswear.inventory]}
+
+  # JMD — TECHNICAL system/data-flow AND the required bounded MULTI-HOP question.
+  # The Drive→Sanity→showroom image pipeline is a three-hop data flow that is
+  # still draft (planning-only): Drive folder contains an image, which
+  # creates/updates a Sanity asset, which renders in a showroom item.
+  - id: jmd-menswear.competency.inventory-image-pipeline-path
+    client_id: jmd-menswear
+    projection: jmd-menswear.inventory-workflow
+    question: >
+      In the inventory-image pipeline, how does a Drive folder image become a
+      published showroom item, and is that multi-hop data-flow still planning-only?
+    rationale: >
+      Protects the automation-consumer job: the Drive→Sanity→showroom pipeline is a
+      proposed MVP flow, not shipped architecture. The bounded three-hop path proves
+      the data flow AND that every edge is draft, so it cannot be treated as a
+      verified live integration or bypass the human-approval boundary.
+    required: true
+    query:
+      op: path
+      start: {id: jmd-menswear.inventory.drive-folder}
+      end: {entity_type: content_record}
+      predicates: [contains, creates_or_updates, renders_in]
+      min_hops: 3
+      max_hops: 3
+    expect:
+      paths:
+        - chain: [jmd-menswear.inventory.drive-folder, contains, jmd-menswear.inventory.image, creates_or_updates, jmd-menswear.inventory.sanity-asset, renders_in, jmd-menswear.inventory.showroom-item]
+          confidences: [draft, draft, draft]
+    guards:
+      # Status-awareness: the whole pipeline stays draft. Promoting any edge to
+      # verified must flip this question — a draft plan cannot pose as live.
+      - {type: require_edge_confidence_in, values: [draft]}
+      # Isolation: brand voice and every other client stay out of the traversal.
+      - {type: forbid_id_prefix, prefixes: [femme-events, jmd-menswear.brand]}

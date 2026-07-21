@@ -1593,6 +1593,36 @@ stdio adapter itself (`server/`) is the next PR, so that entry point currently f
 closed with a structured "not yet implemented" notice. An HTTP adapter is a later,
 purely additive option and is **not** part of v1.
 
+### 14.6 Competency coverage contract and query vocabulary
+
+A schema-valid ontology is not the same as a *sufficient, usable* client
+ontology. `docs/coverage.md` is the normative **client coverage contract**: it
+lists the durable question families a mature client ontology may need to answer
+(business identity/offerings/audiences/constraints; people/roles; systems and
+systems of record; integrations/data flows; workflows/state/approval; metric
+definitions and planning-vs-observed status; maintenance/handoff/lifecycle), and
+records each current client's honest status per family with a controlled
+vocabulary — `covered`, `known gap`, `not applicable`, `deferred / trigger-gated`.
+Missing client knowledge is recorded there as an evidenced gap, never invented as
+a canonical fact.
+
+The contract also separates three orthogonal maturity dimensions that must not be
+conflated: **model representation** (the schema *can* describe a concept),
+**client coverage** (the client ontology actually contains evidence-backed
+resources that answer it), and **runtime queryability** (a supported consumer can
+retrieve the answer safely and status-aware).
+
+Coverage is *proven*, not asserted: `tests/run_competency.py` retrieves each
+`covered` answer from the canonical export using a small, deliberately bounded,
+deterministic query vocabulary — `entities`/`rules`/`projection_resources`, plus
+`relationships` (subject/predicate/object rows, scoped to in-projection edges with
+both endpoints in scope) and `path` (bounded multi-hop traversal with explicit
+`start`/`end` constraints, allowed predicates, and hop bounds). This is **not** a
+general graph-query language and adds no GraphRAG, embeddings, model grading,
+cross-client loading, or second graph store. The relationship/path ops are
+test-owned; their read-only runtime consumer surface is deferred to the separate
+query-surface issue. See `docs/examples.md` (Example 7) for the grammar.
+
 ---
 
 ## 15. Client-specific module seeds based on verified context

@@ -33,27 +33,47 @@ python3 tests/run_cli.py         # the read-only runtime CLI/service: acceptance
 `tests/run_competency.py` is the outcome-oriented suite: it reads the test-owned
 registry `tests/competency/questions.yaml` (NOT a canonical `kind`; never loaded
 as client truth) and proves each client ontology still answers its
-business/governance competency questions. Loading is **projection/client-directed**
-(issue #31 AC): for each question it builds a throwaway SCOPED export through the
-shared loader/export path (never the repo's `build/`) from only the named
-client's manifest, `client.yaml`, the named projection, and the modules that
-projection references — never another client's files and never a module the
-projection excludes (`resolve_scope_paths` computes the file set — widening to
-the full single-client module set rather than scanning-and-excluding when a
-reference points outside `includes.modules`; `export_sqlite.export(..., paths=...)`
-reuses the same `parse_yaml`/table shapes and rejects any path outside `root`).
-Results are then further scoped through the named projection. Four regressions
-back it: **loading-isolation** and **resolver-read isolation** (both instrument
-the ACTUAL `parse_yaml` calls — not just returned path lists — to prove no scoped
-load reaches another client or opens a module the projection excludes),
-**drift-isolation** (a single controlled mutation fails only the relevant
-question), and **registry shape-validation** (a malformed question — including a
-non-string `id`/`client_id`/`projection`, a non-boolean `required`, a guard not
-bound to a selected output column, or a non-scalar filter operand — is rejected
-as a usage error / exit 2 before any answer is trusted). Expected answers live only in the registry, so a consumer
-(issue #19) can reuse the corpus via `evaluate_suite(db_path, questions)` to
-prove YAML/SQLite parity without re-encoding them. It needs no model, network,
-API credential, or live client system.
+business, technical/data-flow, and bounded multi-hop competency questions — the
+proof behind the client coverage contract in `docs/coverage.md`. Its
+projection-scoped query vocabulary is `entities`/`rules`/`projection_resources`
+plus (issue #41) `relationships` (subject/predicate/object rows, in scope only
+when the edge's module is in scope AND both endpoints are in-scope entities) and
+`path` (a **deliberately bounded, deterministic** simple-path traversal with
+explicit `start`/`end` constraints, allowed `predicates`, and `min_hops`/
+`max_hops` ≤ `PATH_HOP_CAP` — NOT a general graph query; no GraphRAG, embeddings,
+model grading, cross-client loading, or second store). Guards keep answers safe:
+status / `require_field_in` / `forbid_field_in` guards prove a draft plan is not
+presented as verified current architecture, and `forbid_id_prefix` /
+`require_edge_confidence_in` / `forbid_edge_confidence_in` guards (each bound to
+the query's output shape) prove no other client's or excluded module's resource
+leaks in. Loading is **projection/client-directed** (issue #31 AC): for each
+question it builds a throwaway SCOPED export through the shared loader/export path
+(never the repo's `build/`) from only the named client's manifest, `client.yaml`,
+the named projection, and the modules that projection references — never another
+client's files and never a module the projection excludes (`resolve_scope_paths`
+computes the file set — widening to the full single-client module set rather than
+scanning-and-excluding when a reference points outside `includes.modules`;
+`export_sqlite.export(..., paths=...)` reuses the same `parse_yaml`/table shapes
+and rejects any path outside `root`). Results are then further scoped through the
+named projection (relationship endpoints and every traversed path node stay in
+scope). Five regressions back it: **loading-isolation** and **resolver-read
+isolation** (both instrument the ACTUAL `parse_yaml` calls — not just returned
+path lists — to prove no scoped load reaches another client or opens a module the
+projection excludes), **relationship/path scope-isolation** (a synthetic full
+export proves, at the result boundary, that a relationship endpoint in an excluded
+module is dropped and a bounded path never traverses an out-of-scope node, a
+disallowed predicate, or beyond its hop bound), **drift-isolation** (a single
+controlled mutation — a status, a projection membership, a relationship
+confidence, or a path-edge confidence — fails only the relevant question), and
+**registry shape-validation** (a malformed question — including a non-string
+`id`/`client_id`/`projection`, a non-boolean `required`, a guard not bound to a
+selected output column, a non-scalar filter operand, or a malformed `path`
+contract — is rejected as a usage error / exit 2 before any answer is trusted).
+Expected answers live only in the registry, so a consumer (issue #19) can reuse
+the corpus via `evaluate_suite(db_path, questions)` to prove YAML/SQLite parity
+without re-encoding them; the relationship/`path` ops are test-owned and their
+runtime consumer surface is deferred to the separate query-surface issue. It
+needs no model, network, API credential, or live client system.
 
 `scripts/check_rules.py` is the runtime guardrail engine (library + CLI, stdlib
 only): it runs a client's `machine_check` rules against copy

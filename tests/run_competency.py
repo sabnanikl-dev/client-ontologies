@@ -75,22 +75,55 @@ from ontology_loader import parse_yaml  # noqa: E402  (single shared YAML entry 
 DEFAULT_QUESTIONS = Path(__file__).resolve().parent / "competency" / "questions.yaml"
 
 # Query ops the registry may name. Kept small and explicit so an unknown op is a
-# loud registry error rather than a silent no-op.
-KNOWN_OPS = {"entities", "rules", "projection_resources"}
+# loud registry error rather than a silent no-op. ``relationships`` and ``path``
+# (issue #41) extend the corpus to controlled subject/predicate/object answers
+# and deliberately bounded, deterministic multi-hop traversal — NOT a general
+# graph-query language: no GraphRAG, embeddings, model grading, or second store.
+KNOWN_OPS = {"entities", "rules", "projection_resources", "relationships", "path"}
 # Guard types the registry may name (safety / status / isolation boundaries).
-KNOWN_GUARDS = {"require_status", "forbid_status", "require_field_equals", "forbid_id_prefix"}
+# ``require_field_in`` / ``forbid_field_in`` generalize the status guards to any
+# selected column (used for relationship ``source_confidence``);
+# ``require_edge_confidence_in`` / ``forbid_edge_confidence_in`` bind to a path
+# answer's edge confidences so a draft data-flow can never be asserted as
+# verified current architecture (issue #41).
+KNOWN_GUARDS = {
+    "require_status", "forbid_status", "require_field_equals", "forbid_id_prefix",
+    "require_field_in", "forbid_field_in",
+    "require_edge_confidence_in", "forbid_edge_confidence_in",
+}
 
 # Per-op: the SQLite table, its stable id column, and the plain columns a query
 # may filter on or select. Anything else in `select` is treated as a
-# ``fields.<name>`` extraction from the row's raw_json.
+# ``fields.<name>`` extraction from the row's raw_json. ``relationships`` scopes
+# on module membership AND both endpoints being in the projection (see
+# ``_scoped_relationships``), never on module membership alone.
 OP_TABLE = {
     "entities": ("entities", "entity_id", {"entity_id", "module_id", "entity_type", "status", "source_confidence", "public_facing", "label"}),
     "rules": ("rules", "rule_id", {"rule_id", "module_id", "title", "status", "severity", "rule_type", "statement", "source_confidence"}),
+    "relationships": ("relationships", "relationship_id", {"relationship_id", "module_id", "subject", "predicate", "object", "source_confidence"}),
 }
+
+# Row ops (a table of per-row columns) vs the two non-row ops.
+ROW_OPS = set(OP_TABLE)  # entities, rules, relationships
 
 # Plain columns a query may filter/select on, per op (the ``select`` list also
 # accepts a ``fields.<name>`` raw_json path; nothing else is a valid token).
 OP_COLUMNS = {op: cols for op, (_t, _id, cols) in OP_TABLE.items()}
+
+# Bounded multi-hop path contract (issue #41). A path query MUST name its start
+# and end node constraints, the allowed edge predicates, and explicit hop bounds;
+# traversal is a simple-path DFS (no repeated node) capped at PATH_HOP_CAP so it
+# stays deliberately bounded and deterministic — not a general graph query.
+PATH_HOP_CAP = 6
+# Keys a start/end node constraint may carry; at least one is required and all
+# values must be strings.
+NODE_CONSTRAINT_KEYS = {"id", "id_prefix", "entity_type"}
+
+# Guards that read a path answer's per-edge source_confidence (path op only).
+EDGE_CONFIDENCE_GUARDS = {"require_edge_confidence_in", "forbid_edge_confidence_in"}
+# Guards that read a per-row status column (never valid on relationships/path/
+# projection_resources answers, which have no such column).
+STATUS_ROW_GUARDS = {"require_status", "forbid_status"}
 
 # Per-guard operand contract. Each required operand carries a shape check so a
 # misspelled operand (e.g. ``prefix`` for ``prefixes``) becomes a loud registry
@@ -101,6 +134,10 @@ GUARD_REQUIRED = {
     "forbid_status": {"statuses": "nonempty_str_list"},
     "require_field_equals": {"field": "nonempty_str", "value": "present"},
     "forbid_id_prefix": {"prefixes": "nonempty_str_list"},
+    "require_field_in": {"field": "nonempty_str", "values": "nonempty_str_list"},
+    "forbid_field_in": {"field": "nonempty_str", "values": "nonempty_str_list"},
+    "require_edge_confidence_in": {"values": "nonempty_str_list"},
+    "forbid_edge_confidence_in": {"values": "nonempty_str_list"},
 }
 
 
@@ -132,8 +169,15 @@ def _is_scalar(value: Any) -> bool:
     return isinstance(value, (str, int, float, bool)) and not isinstance(value, dict)
 
 
-# Per-op id output column a ``forbid_id_prefix`` row guard needs in the select.
-_OP_ID_OUTPUT = {"entities": "entity_id", "rules": "rule_id"}
+# Per-op output column(s) a ``forbid_id_prefix`` row guard needs in the select so
+# there are ids to inspect. A relationship's leak vector is its ENDPOINTS, so an
+# isolation guard on a relationships answer requires both ``subject`` and
+# ``object`` to be selected (the id column alone would miss a foreign endpoint).
+_OP_ID_OUTPUT = {
+    "entities": ("entity_id",),
+    "rules": ("rule_id",),
+    "relationships": ("subject", "object"),
+}
 
 
 def _check_operand(source: str, qid: Any, guard: dict[str, Any], key: str, kind: str) -> None:
@@ -180,26 +224,101 @@ def _validate_guard(source: str, qid: Any, guard: Any, op: str, output_keys: Opt
 def _check_guard_applicability(
     source: str, qid: Any, guard: dict[str, Any], gtype: str, op: str, output_keys: Optional[set]
 ) -> None:
-    """Reject a guard that cannot bind to the query's output shape (silent no-op)."""
+    """Reject a guard that cannot bind to the query's output shape (silent no-op).
+
+    Extended for issue #41's ops:
+      * status guards read a per-row ``status`` column, so they apply only to
+        ``entities``/``rules`` (relationships/path/projection_resources have none);
+      * ``require_field_in`` / ``forbid_field_in`` and ``require_field_equals``
+        need their field selected in a row op, and never apply to path/resources;
+      * edge-confidence guards read a path answer's edge confidences and apply
+        ONLY to a ``path`` op;
+      * ``forbid_id_prefix`` applies to resources, row ops (needs the op's id
+        column selected — both endpoints for relationships), and path answers
+        (node ids, no select needed).
+    """
     resources = op == "projection_resources"
-    if gtype in ("require_status", "forbid_status"):
-        if resources:
-            _q_err(source, qid, f"guard {gtype!r} reads a row 'status' and does not apply to a projection_resources query")
-        if "status" not in (output_keys or set()):
-            _q_err(source, qid, f"guard {gtype!r} requires 'status' in the query's select {sorted(output_keys or [])}")
-    elif gtype == "require_field_equals":
+    is_path = op == "path"
+    fields = output_keys or set()
+
+    if gtype in EDGE_CONFIDENCE_GUARDS:
+        if not is_path:
+            _q_err(source, qid, f"guard {gtype!r} reads path edge confidences and applies only to a path query, not {op!r}")
+        return
+    if gtype in STATUS_ROW_GUARDS:
+        if op not in ("entities", "rules"):
+            _q_err(source, qid, f"guard {gtype!r} reads a per-row 'status' column and does not apply to a {op!r} query")
+        if "status" not in fields:
+            _q_err(source, qid, f"guard {gtype!r} requires 'status' in the query's select {sorted(fields)}")
+        return
+    if gtype in ("require_field_equals", "require_field_in", "forbid_field_in"):
+        if resources or is_path:
+            _q_err(source, qid, f"guard {gtype!r} reads a row field and does not apply to a {op!r} query")
         field = guard.get("field")
-        if resources:
-            _q_err(source, qid, f"guard {gtype!r} reads a row field and does not apply to a projection_resources query")
-        if field not in (output_keys or set()):
-            _q_err(source, qid, f"guard {gtype!r} requires its field {field!r} in the query's select {sorted(output_keys or [])}")
-    elif gtype == "forbid_id_prefix":
-        # Applies to resources (ids come from the resource lists). On a row query
-        # it needs the op's id column selected, else there are no ids to check.
-        if not resources:
-            id_col = _OP_ID_OUTPUT[op]
-            if id_col not in (output_keys or set()):
-                _q_err(source, qid, f"guard {gtype!r} requires the id column {id_col!r} in the query's select {sorted(output_keys or [])}")
+        if field not in fields:
+            _q_err(source, qid, f"guard {gtype!r} requires its field {field!r} in the query's select {sorted(fields)}")
+        return
+    if gtype == "forbid_id_prefix":
+        # Applies to resources (ids from the resource lists) and to path answers
+        # (node ids). On a row query it needs the op's id column(s) selected, else
+        # there are no ids to check.
+        if op in ROW_OPS:
+            needed = _OP_ID_OUTPUT[op]
+            missing = [c for c in needed if c not in fields]
+            if missing:
+                label = "id column" if len(needed) == 1 else "endpoint columns"
+                _q_err(source, qid, f"guard {gtype!r} requires the {label} {list(needed)} in the query's select {sorted(fields)}")
+
+
+def _validate_node_constraint(source: str, qid: Any, name: str, node: Any) -> None:
+    """A path start/end constraint: a mapping with >=1 known key, all values str."""
+    if not isinstance(node, dict) or not node:
+        _q_err(source, qid, f"path {name!r} must be a non-empty mapping of node constraints")
+    unknown = sorted(k for k in node if k not in NODE_CONSTRAINT_KEYS and not str(k).startswith("x_"))
+    if unknown:
+        _q_err(source, qid, f"path {name!r} has unknown constraint key(s) {unknown}; allowed {sorted(NODE_CONSTRAINT_KEYS)}")
+    bound = [k for k in node if k in NODE_CONSTRAINT_KEYS]
+    if not bound:
+        _q_err(source, qid, f"path {name!r} must name at least one of {sorted(NODE_CONSTRAINT_KEYS)}")
+    for key in bound:
+        if not isinstance(node[key], str) or not node[key]:
+            _q_err(source, qid, f"path {name!r} constraint {key!r} must be a non-empty string")
+
+
+def _validate_path_query(source: str, qid: Any, query: dict[str, Any]) -> None:
+    """Validate a bounded multi-hop path query's discriminated shape (issue #41).
+
+    A path query is deliberately explicit: it MUST name ``start``/``end`` node
+    constraints, an allowed-``predicates`` list, and integer ``min_hops``/
+    ``max_hops`` bounds (1 <= min <= max <= PATH_HOP_CAP). Anything missing,
+    mistyped, or unbounded is a usage error rejected BEFORE traversal, so a
+    malformed path can never silently return an empty or unbounded answer.
+    """
+    allowed = {"op", "start", "end", "predicates", "min_hops", "max_hops"}
+    stray = sorted(k for k in query if k not in allowed and not k.startswith("x_"))
+    if stray:
+        _q_err(source, qid, f"path query has unknown key(s) {stray}; allowed {sorted(allowed - {'op'})}")
+    for req in ("start", "end", "predicates", "min_hops", "max_hops"):
+        if req not in query:
+            _q_err(source, qid, f"path query missing required key {req!r}")
+    _validate_node_constraint(source, qid, "start", query["start"])
+    _validate_node_constraint(source, qid, "end", query["end"])
+    preds = query["predicates"]
+    if not isinstance(preds, list) or not preds or not all(isinstance(p, str) and p for p in preds):
+        _q_err(source, qid, "path 'predicates' must be a non-empty list of non-empty strings")
+    if len(set(preds)) != len(preds):
+        _q_err(source, qid, f"path 'predicates' has duplicate entries: {preds}")
+    lo, hi = query["min_hops"], query["max_hops"]
+    # bool is an int subclass; reject it so ``min_hops: true`` cannot pose as 1.
+    for name, val in (("min_hops", lo), ("max_hops", hi)):
+        if not isinstance(val, int) or isinstance(val, bool):
+            _q_err(source, qid, f"path {name!r} must be an integer, got {type(val).__name__}")
+    if lo < 1:
+        _q_err(source, qid, f"path 'min_hops' must be >= 1, got {lo}")
+    if hi < lo:
+        _q_err(source, qid, f"path 'max_hops' ({hi}) must be >= 'min_hops' ({lo})")
+    if hi > PATH_HOP_CAP:
+        _q_err(source, qid, f"path 'max_hops' ({hi}) exceeds the bounded cap {PATH_HOP_CAP}")
 
 
 def _validate_query(source: str, qid: Any, query: Any) -> tuple[str, Optional[set]]:
@@ -220,6 +339,10 @@ def _validate_query(source: str, qid: Any, query: Any) -> tuple[str, Optional[se
         stray = sorted(k for k in query if k != "op" and not k.startswith("x_"))
         if stray:
             _q_err(source, qid, f"projection_resources query takes no operand(s) {stray}")
+        return op, None
+
+    if op == "path":
+        _validate_path_query(source, qid, query)
         return op, None
 
     stray = sorted(k for k in query if k not in {"op", "filters", "select"} and not k.startswith("x_"))
@@ -273,6 +396,19 @@ def _validate_expect(source: str, qid: Any, op: str, output_keys: Optional[set],
                 _q_err(source, qid, f"expect.resources has unknown key {key!r} (allowed: modules/entities/rules)")
             if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
                 _q_err(source, qid, f"expect.resources.{key} must be a list of strings")
+        return
+    if op == "path":
+        paths = expect.get("paths")
+        if not isinstance(paths, list):
+            _q_err(source, qid, "path question must define expect.paths as a list")
+        for path in paths:
+            if not isinstance(path, dict) or set(path.keys()) != {"chain", "confidences"}:
+                _q_err(source, qid, "each expect.paths entry must be a mapping with exactly 'chain' and 'confidences'")
+            chain, conf = path["chain"], path["confidences"]
+            if not isinstance(chain, list) or len(chain) < 3 or len(chain) % 2 == 0 or not all(isinstance(x, str) for x in chain):
+                _q_err(source, qid, "expect.paths[].chain must be an odd-length (node,predicate,...,node) list of strings, length >= 3")
+            if not isinstance(conf, list) or not all(isinstance(x, str) for x in conf) or len(conf) != (len(chain) - 1) // 2:
+                _q_err(source, qid, "expect.paths[].confidences must be a list of strings, one per edge in 'chain'")
         return
     rows = expect.get("rows")
     if not isinstance(rows, list):
@@ -438,6 +574,54 @@ def _scoped_rows(conn: sqlite3.Connection, op: str, client_id: str, includes: di
     return rows
 
 
+def _entity_scope_set(conn: sqlite3.Connection, client_id: str, includes: dict[str, Any]) -> set:
+    """The client's entity ids the projection pulls into scope.
+
+    In scope ⟺ the entity's module is in ``includes.modules`` OR its id is named
+    (or ``.*``-matched) in ``includes.entities``. Restricted to ``client_id`` so
+    no other client's entity can ever be treated as an in-scope endpoint.
+    """
+    scoped_modules = set(includes.get("modules") or [])
+    id_patterns = includes.get("entities") or []
+    in_scope: set = set()
+    for eid, module_id in conn.execute(
+        "SELECT entity_id, module_id FROM entities WHERE client_id = ?", (client_id,)
+    ):
+        if module_id in scoped_modules or _id_matches(eid, id_patterns):
+            in_scope.add(eid)
+    return in_scope
+
+
+def _scoped_relationships(conn: sqlite3.Connection, client_id: str, includes: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the client's relationship rows the projection pulls into scope.
+
+    A relationship is in scope ⟺ (a) it is restricted to ``client_id`` — no
+    cross-client edge is ever considered — AND (b) its defining module is in
+    ``includes.modules`` AND (c) BOTH its ``subject`` and ``object`` entities are
+    in the projection's entity scope. Requiring both endpoints (not just module
+    membership) is what enforces "projection scope for relationship endpoints"
+    (issue #41): an edge whose object entity has left the projection is dropped,
+    not silently surfaced with a foreign/out-of-scope endpoint.
+    """
+    table, _id_col, columns = OP_TABLE["relationships"]
+    ordered_cols = sorted(columns)
+    select_cols = ", ".join(ordered_cols) + ", raw_json"
+    scoped_modules = set(includes.get("modules") or [])
+    entity_scope = _entity_scope_set(conn, client_id, includes)
+
+    rows: list[dict[str, Any]] = []
+    for record in conn.execute(f"SELECT {select_cols} FROM {table} WHERE client_id = ?", (client_id,)):
+        data = dict(zip(ordered_cols, record[:-1]))
+        data["_raw"] = json.loads(record[-1]) if record[-1] else {}
+        if (
+            data.get("module_id") in scoped_modules
+            and data.get("subject") in entity_scope
+            and data.get("object") in entity_scope
+        ):
+            rows.append(data)
+    return rows
+
+
 # --------------------------------------------------------------------------- #
 # Query execution
 # --------------------------------------------------------------------------- #
@@ -490,7 +674,14 @@ def run_query(conn: sqlite3.Connection, question: dict[str, Any]) -> Any:
             "rules": sorted(includes.get("rules") or []),
         }
 
-    rows = _scoped_rows(conn, op, client_id, includes)
+    if op == "path":
+        return _run_path(conn, client_id, includes, query)
+
+    rows = (
+        _scoped_relationships(conn, client_id, includes)
+        if op == "relationships"
+        else _scoped_rows(conn, op, client_id, includes)
+    )
     filters = query.get("filters") or {}
     select = query.get("select") or []
     projected = [
@@ -499,6 +690,78 @@ def run_query(conn: sqlite3.Connection, question: dict[str, Any]) -> Any:
         if _filter_matches(r, filters)
     ]
     return _normalize_rows(projected)
+
+
+def _node_matches(entity_type: Optional[str], node_id: str, constraint: dict[str, Any]) -> bool:
+    """True if a node satisfies a path start/end constraint (all keys ANDed)."""
+    if "id" in constraint and node_id != constraint["id"]:
+        return False
+    if "id_prefix" in constraint and not node_id.startswith(constraint["id_prefix"]):
+        return False
+    if "entity_type" in constraint and entity_type != constraint["entity_type"]:
+        return False
+    return True
+
+
+def _run_path(conn: sqlite3.Connection, client_id: str, includes: dict[str, Any], query: dict[str, Any]) -> list[dict[str, Any]]:
+    """Enumerate bounded, deterministic simple paths within the projection scope.
+
+    Traversal walks ONLY projection-scoped relationships (``_scoped_relationships``
+    already guarantees both endpoints are in scope and the edge is single-client),
+    following ONLY the query's allowed predicates. A path is recorded when its hop
+    count is within ``[min_hops, max_hops]`` and its terminal node satisfies the
+    ``end`` constraint; it is a simple path (no repeated node) capped at
+    ``max_hops`` so the search is finite and deterministic. Every traversed node
+    and edge therefore stays inside the named projection and client — the traversal
+    can never cross into an excluded module or another client.
+    """
+    allowed_preds = set(query["predicates"])
+    min_hops, max_hops = query["min_hops"], query["max_hops"]
+    start_c, end_c = query["start"], query["end"]
+
+    # Entity attributes for the client (node type + scope membership).
+    entity_type: dict[str, str] = {}
+    for eid, etype in conn.execute(
+        "SELECT entity_id, entity_type FROM entities WHERE client_id = ?", (client_id,)
+    ):
+        entity_type[eid] = etype
+    entity_scope = _entity_scope_set(conn, client_id, includes)
+
+    # Scoped, predicate-filtered adjacency (subject -> list of edges).
+    adjacency: dict[str, list[dict[str, Any]]] = {}
+    for rel in _scoped_relationships(conn, client_id, includes):
+        if rel["predicate"] in allowed_preds:
+            adjacency.setdefault(rel["subject"], []).append(rel)
+
+    starts = sorted(
+        eid for eid in entity_scope if _node_matches(entity_type.get(eid), eid, start_c)
+    )
+    results: list[dict[str, Any]] = []
+
+    def walk(node: str, nodes: list[str], preds: list[str], confs: list[str], hops: int) -> None:
+        if min_hops <= hops <= max_hops and _node_matches(entity_type.get(node), node, end_c):
+            chain: list[str] = []
+            for i, n in enumerate(nodes):
+                chain.append(n)
+                if i < len(preds):
+                    chain.append(preds[i])
+            results.append({"chain": chain, "confidences": list(confs)})
+        if hops >= max_hops:
+            return
+        for edge in sorted(adjacency.get(node, []), key=lambda e: e["relationship_id"]):
+            nxt = edge["object"]
+            if nxt in nodes:  # simple path only — never revisit a node (no cycles)
+                continue
+            walk(nxt, nodes + [nxt], preds + [edge["predicate"]], confs + [edge["source_confidence"]], hops + 1)
+
+    for start in starts:
+        walk(start, [start], [], [], 0)
+    return _normalize_paths(results)
+
+
+def _normalize_paths(paths: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort path dicts deterministically (by their JSON serialization)."""
+    return sorted(paths, key=lambda p: json.dumps(p, sort_keys=True, ensure_ascii=False))
 
 
 def _normalize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -545,22 +808,49 @@ def _compare_resources(expected: dict[str, Any], actual: dict[str, Any]) -> list
     return failures
 
 
+def _compare_paths(expected: list[dict[str, Any]], actual: list[dict[str, Any]]) -> list[str]:
+    """Return human diagnostics for an expected-vs-actual path-set mismatch."""
+    exp = _normalize_paths([dict(p) for p in expected])
+    act = _normalize_paths([dict(p) for p in actual])
+    if exp == act:
+        return []
+    exp_keys = {json.dumps(p, sort_keys=True, ensure_ascii=False) for p in exp}
+    act_keys = {json.dumps(p, sort_keys=True, ensure_ascii=False) for p in act}
+    missing = [p for p in exp if json.dumps(p, sort_keys=True, ensure_ascii=False) not in act_keys]
+    unexpected = [p for p in act if json.dumps(p, sort_keys=True, ensure_ascii=False) not in exp_keys]
+    failures = [f"path set mismatch: expected {len(exp)} path(s), got {len(act)}"]
+    if missing:
+        failures.append("  missing (expected, not returned): " + json.dumps(missing, ensure_ascii=False))
+    if unexpected:
+        failures.append("  unexpected (returned, not expected): " + json.dumps(unexpected, ensure_ascii=False))
+    return failures
+
+
 def _ids_of(op: str, actual: Any) -> list[str]:
     """The id values in a result, for id-prefix isolation guards."""
     if op == "projection_resources":
         return [*actual.get("modules", []), *actual.get("entities", []), *actual.get("rules", [])]
+    if op == "path":
+        # Every node visited by every returned path (chain positions 0,2,4,...).
+        return [tok for path in actual for i, tok in enumerate(path.get("chain", [])) if i % 2 == 0]
     ids: list[str] = []
     for row in actual:
-        for key in ("entity_id", "rule_id"):
+        # entity/rule id columns plus a relationship's endpoints + its own id.
+        for key in ("entity_id", "rule_id", "subject", "object", "relationship_id"):
             if key in row and isinstance(row[key], str):
                 ids.append(row[key])
     return ids
 
 
+def _edge_confidences_of(actual: Any) -> list[str]:
+    """Every per-edge source_confidence across all returned paths."""
+    return [c for path in actual for c in path.get("confidences", [])]
+
+
 def _check_guards(op: str, actual: Any, guards: list[dict[str, Any]]) -> list[str]:
     """Evaluate safety/status/isolation guards against the actual answer."""
     failures: list[str] = []
-    rows = [] if op == "projection_resources" else actual
+    rows = actual if op in ROW_OPS else []
     for guard in guards or []:
         gtype = guard.get("type")
         if gtype == "require_status":
@@ -578,6 +868,26 @@ def _check_guards(op: str, actual: Any, guards: list[dict[str, Any]]) -> list[st
             bad = sorted({str(r.get(field)) for r in rows if r.get(field) != value})
             if bad:
                 failures.append(f"guard require_field_equals: {field!r} must equal {value!r}, saw {bad}")
+        elif gtype == "require_field_in":
+            field, values = guard.get("field"), set(guard.get("values") or [])
+            bad = sorted({str(r.get(field)) for r in rows if r.get(field) not in values})
+            if bad:
+                failures.append(f"guard require_field_in: {field!r} must be in {sorted(values)}, saw {bad}")
+        elif gtype == "forbid_field_in":
+            field, values = guard.get("field"), set(guard.get("values") or [])
+            bad = sorted({str(r.get(field)) for r in rows if r.get(field) in values})
+            if bad:
+                failures.append(f"guard forbid_field_in: {field!r} must not be in {sorted(values)}, saw {bad}")
+        elif gtype == "require_edge_confidence_in":
+            values = set(guard.get("values") or [])
+            bad = sorted({c for c in _edge_confidences_of(actual) if c not in values})
+            if bad:
+                failures.append(f"guard require_edge_confidence_in: every path edge confidence must be in {sorted(values)}, saw {bad}")
+        elif gtype == "forbid_edge_confidence_in":
+            values = set(guard.get("values") or [])
+            bad = sorted({c for c in _edge_confidences_of(actual) if c in values})
+            if bad:
+                failures.append(f"guard forbid_edge_confidence_in: no path edge confidence may be in {sorted(values)}, saw {bad}")
         elif gtype == "forbid_id_prefix":
             prefixes = tuple(guard.get("prefixes") or [])
             bad = sorted({i for i in _ids_of(op, actual) if i.startswith(prefixes)})
@@ -610,6 +920,9 @@ def evaluate_question(conn: sqlite3.Connection, question: dict[str, Any]) -> dic
     if op == "projection_resources":
         expected = {k: sorted(v or []) for k, v in (expect.get("resources") or {}).items()}
         failures += _compare_resources(expected, actual)
+    elif op == "path":
+        expected = _normalize_paths([dict(p) for p in expect.get("paths") or []])
+        failures += _compare_paths(expected, actual)
     else:
         expected = _normalize_rows([dict(r) for r in expect.get("rows") or []])
         failures += _compare_rows(expected, actual)
@@ -820,6 +1133,26 @@ def _drift_scenarios() -> list[dict[str, Any]]:
             (json.dumps(includes), "jmd-menswear.inventory-workflow"),
         )
 
+    def flip_relationship_confidence(conn: sqlite3.Connection) -> None:
+        # Relationship-confidence drift: the owner-reviewed grounding edge is
+        # demoted to draft, which must trip only the Femme relationship-backed
+        # grounding question (row mismatch + the require_field_in confidence guard).
+        conn.execute(
+            "UPDATE relationships SET source_confidence = 'draft' WHERE relationship_id = ?",
+            ("femme-events.visibility.gbp-uses-business-fact",),
+        )
+
+    def promote_path_edge_confidence(conn: sqlite3.Connection) -> None:
+        # Path-edge confidence drift: a draft data-flow edge is promoted to
+        # verified, which must trip only the JMD multi-hop pipeline question
+        # (path confidences mismatch + the require_edge_confidence_in guard). This
+        # is the status-awareness case: a draft plan cannot masquerade as verified
+        # current architecture without a competency question flipping to fail.
+        conn.execute(
+            "UPDATE relationships SET source_confidence = 'verified' WHERE relationship_id = ?",
+            ("jmd-menswear.inventory.image-creates-sanity-asset",),
+        )
+
     return [
         {
             "name": "metric-status-drift",
@@ -830,6 +1163,16 @@ def _drift_scenarios() -> list[dict[str, Any]]:
             "name": "projection-membership-drift",
             "expect_failed": "jmd-menswear.competency.inventory-workflow-resources",
             "mutate": drop_projection_entity,
+        },
+        {
+            "name": "relationship-confidence-drift",
+            "expect_failed": "femme-events.competency.gbp-grounded-in-owner-reviewed-fact",
+            "mutate": flip_relationship_confidence,
+        },
+        {
+            "name": "path-edge-confidence-drift",
+            "expect_failed": "jmd-menswear.competency.inventory-image-pipeline-path",
+            "mutate": promote_path_edge_confidence,
         },
     ]
 
@@ -1088,6 +1431,145 @@ def run_resolver_read_isolation_probe(tmpdir: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Relationship / path scope-isolation regression (issue #41; the endpoint- and
+# traversal-leakage negative case, evaluated on a full export so the assertion
+# targets RESULT-level projection scoping — the complement of the parse-level
+# loading-isolation probe above)
+# --------------------------------------------------------------------------- #
+_SCOPE_FIXTURE = {
+    "clients/acme/ontology.yaml": (
+        'schema_version: "0.1"\nkind: ontology\nid: acme.ontology\nclient_id: acme\n'
+        "status: active\nmodules:\n"
+        "  - {path: modules/flow.yaml, id: acme.flow}\n"
+        "  - {path: modules/hidden.yaml, id: acme.hidden}\n"
+        "projections:\n"
+        "  - {path: projections/p.yaml, id: acme.p}\n"
+    ),
+    "clients/acme/client.yaml": (
+        'schema_version: "0.1"\nkind: client\nid: acme\nname: Acme\nstatus: active\n'
+    ),
+    # flow: the in-scope module. a→b→c is a two-hop contains/renders_in chain;
+    # a→d is a 'uses' edge (excluded by predicate); c→z points at an entity that
+    # lives in the EXCLUDED hidden module (out-of-scope endpoint).
+    "clients/acme/modules/flow.yaml": (
+        'schema_version: "0.1"\nkind: ontology_module\nid: acme.flow\nclient_id: acme\n'
+        "title: Flow\nstatus: active\n"
+        "entities:\n"
+        "  - {id: acme.flow.a, label: a, entity_type: system_resource}\n"
+        "  - {id: acme.flow.b, label: b, entity_type: media_asset}\n"
+        "  - {id: acme.flow.c, label: c, entity_type: content_record}\n"
+        "  - {id: acme.flow.d, label: d, entity_type: business_object}\n"
+        "relationships:\n"
+        "  - {id: acme.flow.a-contains-b, subject: acme.flow.a, predicate: contains, object: acme.flow.b, source_confidence: draft}\n"
+        "  - {id: acme.flow.b-renders-c, subject: acme.flow.b, predicate: renders_in, object: acme.flow.c, source_confidence: draft}\n"
+        "  - {id: acme.flow.a-uses-d, subject: acme.flow.a, predicate: uses, object: acme.flow.d, source_confidence: draft}\n"
+        "  - {id: acme.flow.c-contains-z, subject: acme.flow.c, predicate: contains, object: acme.hidden.z, source_confidence: draft}\n"
+    ),
+    # hidden: excluded from projection p. Its entity z must never appear as a
+    # relationship endpoint or a traversed path node.
+    "clients/acme/modules/hidden.yaml": (
+        'schema_version: "0.1"\nkind: ontology_module\nid: acme.hidden\nclient_id: acme\n'
+        "title: Hidden\nstatus: active\n"
+        "entities:\n"
+        "  - {id: acme.hidden.z, label: z, entity_type: content_record}\n"
+    ),
+    "clients/acme/projections/p.yaml": (
+        'schema_version: "0.1"\nkind: projection\nid: acme.p\nclient_id: acme\n'
+        "status: active\nincludes:\n  modules: [acme.flow]\n"
+    ),
+}
+
+
+def _scope_question(op: str, **query: Any) -> dict[str, Any]:
+    """A minimal in-memory question for driving ``run_query`` in the scope probe."""
+    return {"id": f"probe.{op}", "client_id": "acme", "projection": "acme.p", "query": {"op": op, **query}}
+
+
+def run_query_scope_probes(tmpdir: Path) -> dict[str, Any]:
+    """Prove relationship endpoints and path traversal stay within projection scope.
+
+    Builds a synthetic single-client fixture with an in-scope ``flow`` module and
+    an EXCLUDED ``hidden`` module, exports the FULL database (so nothing is
+    pre-filtered at the parse boundary), then drives ``run_query`` through the
+    ``acme.p`` projection (includes only ``flow``) and asserts, at the result
+    boundary:
+
+      * a relationship whose object lives in the excluded module
+        (``flow.c → hidden.z``) is DROPPED — endpoint isolation, not just module
+        membership;
+      * a ``uses`` edge is excluded when the query's predicate allow-list omits it;
+      * a bounded path never traverses into the out-of-scope node ``z`` and never
+        follows a disallowed predicate, so exactly the in-scope chain is returned;
+      * hop bounds are honored (a max_hops=1 search finds no 2-hop terminal).
+    """
+    root = tmpdir / "scope-fixture"
+    for rel, text in _SCOPE_FIXTURE.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    db = tmpdir / "scope-fixture.sqlite"
+    e.export(root, db)  # full export — no pre-scoping at the parse layer
+
+    conn = sqlite3.connect(db)
+    cases: list[dict[str, Any]] = []
+
+    def record(name: str, ok: bool, detail: Any) -> None:
+        cases.append({"name": name, "ok": ok, "detail": detail})
+
+    try:
+        # 1. Relationship endpoint isolation: c→z (object in excluded module) is
+        #    dropped; only the two in-scope contains/renders_in edges remain.
+        rels = run_query(conn, _scope_question(
+            "relationships", filters={"predicate": ["contains", "renders_in"]},
+            select=["subject", "predicate", "object", "source_confidence"],
+        ))
+        objs = {r["object"] for r in rels}
+        ok = (
+            {r["subject"] + "->" + r["object"] for r in rels}
+            == {"acme.flow.a->acme.flow.b", "acme.flow.b->acme.flow.c"}
+            and "acme.hidden.z" not in objs
+        )
+        record("relationship-endpoint-isolation", ok, rels)
+
+        # 2. Predicate filter drops the 'uses' edge entirely.
+        used = run_query(conn, _scope_question(
+            "relationships", filters={"predicate": "uses"},
+            select=["subject", "predicate", "object", "source_confidence"],
+        ))
+        record("relationship-predicate-filter", used == [
+            {"subject": "acme.flow.a", "predicate": "uses", "object": "acme.flow.d", "source_confidence": "draft"}
+        ], used)
+
+        # 3. Path traversal stays in scope: exactly a→b→c, never reaching z, and
+        #    never following the 'uses' edge.
+        paths = run_query(conn, _scope_question(
+            "path", start={"id": "acme.flow.a"}, end={"entity_type": "content_record"},
+            predicates=["contains", "renders_in"], min_hops=1, max_hops=4,
+        ))
+        all_nodes = {tok for p in paths for i, tok in enumerate(p["chain"]) if i % 2 == 0}
+        ok_path = (
+            paths == [{"chain": ["acme.flow.a", "contains", "acme.flow.b", "renders_in", "acme.flow.c"],
+                       "confidences": ["draft", "draft"]}]
+            and "acme.hidden.z" not in all_nodes
+            and "acme.flow.d" not in all_nodes
+        )
+        record("path-traversal-isolation", ok_path, paths)
+
+        # 4. Hop bound: a max_hops=1 search finds no content_record terminal (c is
+        #    two hops away), so the bounded traversal returns nothing.
+        short = run_query(conn, _scope_question(
+            "path", start={"id": "acme.flow.a"}, end={"entity_type": "content_record"},
+            predicates=["contains", "renders_in"], min_hops=1, max_hops=1,
+        ))
+        record("path-hop-bound", short == [], short)
+    finally:
+        conn.close()
+
+    passed = all(c["ok"] for c in cases)
+    return {"passed": passed, "cases": cases}
+
+
+# --------------------------------------------------------------------------- #
 # Registry shape-validation regression (the malformed-registry negative case)
 # --------------------------------------------------------------------------- #
 def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
@@ -1211,7 +1693,128 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
         ("guard-not-applicable-to-resources",
          doc(q(query={"op": "projection_resources"}, expect={"resources": {}},
                guards=[{"type": "require_status", "statuses": ["active"]}])),
-         "does not apply to a projection_resources"),
+         "does not apply to a 'projection_resources'"),
+        # ---- issue #41: relationships op shape --------------------------------
+        # Valid relationships control — a well-formed subject/predicate/object
+        # query with an endpoint-bound isolation guard must be accepted.
+        ("valid-relationships-control",
+         doc(q(query={"op": "relationships", "filters": {"predicate": "uses"},
+                      "select": ["subject", "predicate", "object", "source_confidence"]},
+               expect={"rows": [{"subject": "c.a", "predicate": "uses", "object": "c.b", "source_confidence": "verified"}]},
+               guards=[{"type": "forbid_id_prefix", "prefixes": ["other"]},
+                       {"type": "require_field_in", "field": "source_confidence", "values": ["verified", "owner_reviewed"]}])),
+         None),
+        # A select token that is not a real relationships column must be rejected.
+        ("relationships-unknown-select-column",
+         doc(q(query={"op": "relationships", "select": ["subject", "bogus"]},
+               expect={"rows": []})),
+         "bogus"),
+        # forbid_id_prefix on relationships needs BOTH endpoints selected — the id
+        # column alone would miss a foreign/out-of-scope endpoint.
+        ("relationships-id-guard-without-endpoints",
+         doc(q(query={"op": "relationships", "select": ["subject", "predicate"]},
+               expect={"rows": [{"subject": "c.a", "predicate": "uses"}]},
+               guards=[{"type": "forbid_id_prefix", "prefixes": ["other"]}])),
+         "endpoint columns"),
+        # A per-row status guard has no 'status' column on a relationships answer.
+        ("status-guard-on-relationships",
+         doc(q(query={"op": "relationships", "select": ["subject", "object", "source_confidence"]},
+               expect={"rows": [{"subject": "c.a", "object": "c.b", "source_confidence": "draft"}]},
+               guards=[{"type": "require_status", "statuses": ["active"]}])),
+         "does not apply to a 'relationships'"),
+        # require_field_in whose field is not selected is a silent no-op → reject.
+        ("require-field-in-not-selected",
+         doc(q(query={"op": "relationships", "select": ["subject", "object"]},
+               expect={"rows": [{"subject": "c.a", "object": "c.b"}]},
+               guards=[{"type": "require_field_in", "field": "source_confidence", "values": ["verified"]}])),
+         "requires its field 'source_confidence'"),
+        # ---- issue #41: bounded path op shape ---------------------------------
+        # Valid path control — explicit start/end/predicates/hops + an edge
+        # confidence guard must be accepted.
+        ("valid-path-control",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"entity_type": "content_record"},
+                      "predicates": ["contains", "renders_in"], "min_hops": 1, "max_hops": 3},
+               expect={"paths": [{"chain": ["c.a", "contains", "c.b"], "confidences": ["draft"]}]},
+               guards=[{"type": "require_edge_confidence_in", "values": ["draft"]},
+                       {"type": "forbid_id_prefix", "prefixes": ["other"]}])),
+         None),
+        # An unknown path key must fail closed, not be silently ignored.
+        ("path-unknown-key",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2, "hops": 3},
+               expect={"paths": []})),
+         "unknown key(s)"),
+        # A missing start constraint is a usage error.
+        ("path-missing-start",
+         doc(q(query={"op": "path", "end": {"id": "c.b"}, "predicates": ["contains"],
+                      "min_hops": 1, "max_hops": 2},
+               expect={"paths": []})),
+         "missing required key 'start'"),
+        # A missing predicates list is a usage error.
+        ("path-missing-predicates",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "min_hops": 1, "max_hops": 2},
+               expect={"paths": []})),
+         "missing required key 'predicates'"),
+        # An empty start constraint names no node → reject.
+        ("path-empty-start",
+         doc(q(query={"op": "path", "start": {}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": []})),
+         "non-empty mapping"),
+        # An unknown start constraint key → reject.
+        ("path-unknown-constraint-key",
+         doc(q(query={"op": "path", "start": {"typ": "x"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": []})),
+         "unknown constraint key"),
+        # predicates must be a non-empty list of strings, not a bare string.
+        ("path-predicates-not-list",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": "contains", "min_hops": 1, "max_hops": 2},
+               expect={"paths": []})),
+         "must be a non-empty list"),
+        # min_hops must not exceed max_hops.
+        ("path-min-gt-max",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 3, "max_hops": 2},
+               expect={"paths": []})),
+         "must be >= 'min_hops'"),
+        # max_hops must stay within the bounded cap — traversal is deliberately bounded.
+        ("path-max-over-cap",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 99},
+               expect={"paths": []})),
+         "exceeds the bounded cap"),
+        # A boolean min_hops must not pose as an integer 1.
+        ("path-hops-not-int",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": True, "max_hops": 2},
+               expect={"paths": []})),
+         "must be an integer"),
+        # An edge-confidence guard reads path edges and never applies to a row op.
+        ("edge-confidence-guard-on-entities",
+         doc(q(guards=[{"type": "require_edge_confidence_in", "values": ["draft"]}])),
+         "applies only to a path query"),
+        # require_edge_confidence_in missing its values operand → reject.
+        ("edge-confidence-guard-missing-values",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": []},
+               guards=[{"type": "require_edge_confidence_in"}])),
+         "missing required operand"),
+        # expect.paths must be a list.
+        ("path-expect-not-list",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": {}})),
+         "expect.paths as a list"),
+        # An even-length chain is not a valid (node,predicate,...,node) alternation.
+        ("path-expect-chain-even",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": [{"chain": ["c.a", "contains"], "confidences": ["draft"]}]})),
+         "odd-length"),
     ]
 
 
@@ -1254,6 +1857,7 @@ def _print_human(
     probes: dict[str, Any],
     loading: dict[str, Any],
     resolver: dict[str, Any],
+    scope: dict[str, Any],
 ) -> None:
     print("Competency questions\n" + "=" * 20)
     for r in results:
@@ -1292,6 +1896,10 @@ def _print_human(
         print(f"[{mark}] {case['name']} ({case['projection']}): "
               f"needed={case['needed_module_ids']} excluded={case['excluded_module_ids']}; "
               f"excluded modules parsed={case['excluded_modules_parsed']}")
+    print("\nRelationship/path scope-isolation regression (synthetic; result boundary)\n" + "-" * 71)
+    for case in scope["cases"]:
+        mark = "PASS" if case["ok"] else "FAIL"
+        print(f"[{mark}] {case['name']}")
 
 
 def run(argv: Optional[list] = None) -> int:
@@ -1329,6 +1937,11 @@ def run(argv: Optional[list] = None) -> int:
         # PARSES a module the projection excludes (Codex Reviewer A), instrumented
         # at the real parse boundary on a throwaway fixture.
         resolver = run_resolver_read_isolation_probe(tmpdir)
+        # Synthetic relationship/path scope-isolation regression (issue #41): prove
+        # a relationship's endpoints and a path's traversal stay inside the named
+        # projection (an excluded-module endpoint and a disallowed predicate never
+        # leak), evaluated at the RESULT boundary on a full export.
+        scope = run_query_scope_probes(tmpdir)
         try:
             exports = _build_scope_exports(root, questions, tmpdir)
         except QuestionError as exc:
@@ -1344,6 +1957,7 @@ def run(argv: Optional[list] = None) -> int:
         or not probes["passed"]
         or not loading["passed"]
         or not resolver["passed"]
+        or not scope["passed"]
     ) else 0
 
     if args.json:
@@ -1357,16 +1971,17 @@ def run(argv: Optional[list] = None) -> int:
                 "registry_probes": probes,
                 "loading_isolation": loading,
                 "resolver_read_isolation": resolver,
+                "query_scope_isolation": scope,
                 "exit_code": exit_code,
             },
             ensure_ascii=False,
             indent=2,
         ))
     else:
-        _print_human(results, drift, probes, loading, resolver)
+        _print_human(results, drift, probes, loading, resolver, scope)
         if exit_code == 0:
             print(f"\nall {len(results)} competency question(s) passed; drift isolation + registry shape "
-                  "+ loading isolation + resolver-read isolation checks hold")
+                  "+ loading isolation + resolver-read isolation + query scope-isolation checks hold")
         else:
             if failed_required:
                 print(f"\nFAILED: {len(failed_required)} required competency question(s) failed", file=sys.stderr)
@@ -1381,6 +1996,9 @@ def run(argv: Optional[list] = None) -> int:
             if not resolver["passed"]:
                 bad = [c["name"] for c in resolver["cases"] if not c["ok"]]
                 print(f"FAILED: resolver-read isolation regression parsed an excluded module: {bad}", file=sys.stderr)
+            if not scope["passed"]:
+                bad = [c["name"] for c in scope["cases"] if not c["ok"]]
+                print(f"FAILED: relationship/path scope-isolation regression leaked out-of-scope resources: {bad}", file=sys.stderr)
     return exit_code
 
 

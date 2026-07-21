@@ -680,6 +680,17 @@ def _row_for(op: str, resource: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+# The read-only runtime consumer surface (issue #19) exposes entity/rule/resource
+# views. The relationship and bounded-path query ops added by issue #41 are a
+# TEST-OWNED competency capability whose consumer surface is deferred to the
+# separate runtime query-surface issue (issue #41 scope: "No runtime CLI expansion
+# in this issue; the read-only query-surface issue consumes this contract"). So
+# YAML/SQLite service parity is asserted for the ops the service actually serves;
+# for the newer ops the runner still gates correctness (required-pass) and its own
+# YAML-vs-SQLite equivalence is inherent (one shared loader/export path).
+_SERVICE_PARITY_OPS = {"entities", "rules", "projection_resources"}
+
+
 def service_answer(ds: svc.Dataset, question: dict[str, Any]) -> Any:
     """Answer a competency question through the PUBLIC runtime operation a consumer
     calls (``get_projection``), then apply the runner's OWN filter/select/normalize
@@ -723,6 +734,12 @@ def service_answer(ds: svc.Dataset, question: dict[str, Any]) -> Any:
 def test_competency_parity(ds_yaml: svc.Dataset, ds_sqlite: svc.Dataset, canonical_db: Path) -> None:
     questions = rc.load_questions()
     check(len(questions) >= 4, "expected the live competency corpus to have >= 4 questions")
+    # Issue #41 adds relationship + path ops; assert the corpus actually exercises
+    # a service-served op AND at least one deferred op, so this guard stays honest
+    # if the op sets ever change.
+    ops = {q["query"]["op"] for q in questions}
+    check(bool(ops & _SERVICE_PARITY_OPS), "corpus must include a service-served op")
+    served = deferred = 0
     conn = sqlite3.connect(canonical_db)
     try:
         for q in questions:
@@ -732,6 +749,13 @@ def test_competency_parity(ds_yaml: svc.Dataset, ds_sqlite: svc.Dataset, canonic
                     runner["status"] == "pass",
                     f"required competency question failed against export: {q['id']}: {runner['failures']}",
                 )
+            if q["query"]["op"] not in _SERVICE_PARITY_OPS:
+                # Deferred consumer surface (relationships/path): the runner already
+                # proved correctness above; the read-only service does not expose
+                # these ops yet (issue #41 defers that to the query-surface issue).
+                deferred += 1
+                continue
+            served += 1
             ans_yaml = service_answer(ds_yaml, q)
             ans_sqlite = service_answer(ds_sqlite, q)
             check(
@@ -746,6 +770,8 @@ def test_competency_parity(ds_yaml: svc.Dataset, ds_sqlite: svc.Dataset, canonic
             )
     finally:
         conn.close()
+    check(served >= 1 and deferred >= 1,
+          f"expected both service-served (>=1) and deferred (>=1) competency ops, got served={served} deferred={deferred}")
 
 
 # --------------------------------------------------------------------------- #
