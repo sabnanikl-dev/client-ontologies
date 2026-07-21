@@ -206,6 +206,9 @@ def _controlled_vocab(name: str) -> frozenset:
         elif name in ("confidence", "status"):
             doc = json.loads((SCHEMAS_DIR / "defs.schema.json").read_text(encoding="utf-8"))
             vals = doc["$defs"][name]["enum"]
+        elif name == "severity":
+            doc = json.loads((SCHEMAS_DIR / "rule.schema.json").read_text(encoding="utf-8"))
+            vals = doc["$defs"]["rule"]["properties"]["severity"]["enum"]
         else:  # pragma: no cover - guarded by the closed _COLUMN_VOCAB map
             raise KeyError(name)
         _VOCAB_CACHE[name] = frozenset(vals)
@@ -221,7 +224,21 @@ _COLUMN_VOCAB = {
     "entity_type": ("entity_type", False),
     "source_confidence": ("confidence", False),
     "status": ("status", False),
+    # A rule's ``severity`` is a controlled schema enum too (Codex Reviewer A: it
+    # was missing here, so ``severity: {typo}`` could filter/assert an unreal token
+    # and silently match nothing). Kept in lockstep with schemas/rule.schema.json.
+    "severity": ("severity", False),
 }
+
+# The Python operand TYPE each real filter/select column expects. Every ontology
+# column is string-valued except ``public_facing`` (a boolean). A filter or
+# expected-row operand of the wrong type can never equal a stored value, so it
+# would silently drop a filter or match no row — the exact false-pass Codex
+# Reviewer A reproduced with ``subject: false`` on a required question. Enforcing
+# the type up front turns that into a loud usage error. (Controlled columns are
+# already str-checked by ``_check_vocab_token``; this closes the remaining plain
+# string columns — subject/object/entity_id/module_id/title/…​ — and the one bool.)
+_BOOL_COLUMNS = frozenset({"public_facing"})
 
 
 def _check_vocab_token(source: str, qid: Any, label: str, token: Any, vocab_name: str, allow_x: bool) -> None:
@@ -246,6 +263,42 @@ def _check_vocab_values(source: str, qid: Any, label: str, values: Any, column: 
     vocab_name, allow_x = spec
     for v in (values if isinstance(values, list) else [values]):
         _check_vocab_token(source, qid, label, v, vocab_name, allow_x)
+
+
+def _check_column_operand_types(source: str, qid: Any, label: str, values: Any, column: str) -> None:
+    """Reject a filter/expected operand whose scalar type cannot match the column.
+
+    Every ontology column is string-valued except ``public_facing`` (boolean). A
+    bool/number against a string column (``subject: false``) can never equal a
+    stored value, so it silently drops the filter / matches nothing and lets an
+    empty answer pass a required question (Codex Reviewer A). ``bool`` is an ``int``
+    subclass, so it is rejected for string columns and required exactly for the
+    boolean column.
+    """
+    for v in (values if isinstance(values, list) else [values]):
+        if column in _BOOL_COLUMNS:
+            if not isinstance(v, bool):
+                _q_err(source, qid, f"{label} for boolean column {column!r} must be true/false, got {type(v).__name__}")
+        elif not isinstance(v, str):
+            _q_err(source, qid, f"{label} for string column {column!r} must be a string, got {type(v).__name__}")
+
+
+def _expected_answer_is_empty(op: str, expect: dict[str, Any]) -> bool:
+    """True when a question asserts NO expected resource (an empty coverage claim).
+
+    A ``required`` question is a positive coverage proof, so an empty expected
+    answer with vacuous universal guards must not pass as coverage (Codex Reviewer
+    A). ``validate_questions`` rejects that combination; a deliberate absence /
+    negative-assertion is intentionally NOT smuggled in through an empty required
+    expectation (see the header note), so an intentionally empty answer must be
+    marked ``required: false``.
+    """
+    if op == "projection_resources":
+        res = expect.get("resources") or {}
+        return not any(res.get(k) for k in ("modules", "entities", "rules"))
+    if op == "path":
+        return not (expect.get("paths") or [])
+    return not (expect.get("rows") or [])
 
 
 # Per-op output column(s) a ``forbid_id_prefix`` row guard needs in the select so
@@ -478,9 +531,14 @@ def _validate_query(source: str, qid: Any, query: Any) -> tuple[str, Optional[se
                     _q_err(source, qid, f"filter {col!r} list operand must be a non-empty list of scalars")
             elif not _is_scalar(want):
                 _q_err(source, qid, f"filter {col!r} operand must be a scalar or list of scalars, got {type(want).__name__}")
+            # A filter operand must also be the right TYPE for its column — a
+            # bool/number against a string column (``subject: false``) can never
+            # match and would silently drop the filter (Codex Reviewer A).
+            _check_column_operand_types(source, qid, f"filter {col!r} value", want, col)
             # A controlled column (predicate / entity_type / source_confidence /
-            # status) must filter on a real schema term — a typo'd predicate would
-            # otherwise silently match nothing and pass a required question.
+            # status / severity) must filter on a real schema term — a typo'd
+            # predicate would otherwise silently match nothing and pass a required
+            # question.
             _check_vocab_values(source, qid, f"filter {col!r} value", want, col)
 
     select = query.get("select")
@@ -558,9 +616,14 @@ def _validate_expect(source: str, qid: Any, op: str, output_keys: Optional[set],
         if keys != output_keys:
             _q_err(source, qid, f"expect row keys {sorted(keys)} do not match select output keys {sorted(output_keys or [])}")
         # An expected value on a controlled column (predicate / source_confidence /
-        # entity_type / status) must itself be a real schema term, so an expected
-        # row cannot assert a typo'd predicate the query could never return.
+        # entity_type / status / severity) must itself be a real schema term, so an
+        # expected row cannot assert a typo'd predicate the query could never
+        # return. A real column's expected value must also be the right TYPE
+        # (``subject: false`` is rejected); a ``fields.<name>`` output key is not a
+        # column, so its value type is intentionally unconstrained here.
         for col, val in row.items():
+            if col in OP_COLUMNS.get(op, set()):
+                _check_column_operand_types(source, qid, f"expect row {col!r} value", val, col)
             _check_vocab_values(source, qid, f"expect row {col!r} value", val, col)
 
 
@@ -581,6 +644,16 @@ def _endpoint_matches(constraint: dict[str, Any], node: str) -> Optional[str]:
 def _validate_expected_chain(source: str, qid: Any, query: dict[str, Any], chain: list, conf: list) -> None:
     """Relate one expected path chain to the query's own bounds/predicates/endpoints."""
     nodes, preds = chain[0::2], chain[1::2]
+    # Traversal is simple-path only (``_run_path`` never revisits a node), so an
+    # expected chain that repeats a node can NEVER be produced and is a statically
+    # impossible contract, not a real coverage assertion (Integration Auditor: a
+    # cyclic ``a -> b -> a`` chain was accepted and later failed as an answer
+    # mismatch / exit 1 instead of an early usage error / exit 2).
+    if len(set(nodes)) != len(nodes):
+        dupes = sorted({n for n in nodes if nodes.count(n) > 1})
+        _q_err(source, qid,
+               f"expect.paths[].chain repeats node(s) {dupes}; a simple-path query "
+               f"can never return a chain that revisits a node")
     hops = len(preds)
     lo, hi = query["min_hops"], query["max_hops"]
     if not (lo <= hops <= hi):
@@ -667,12 +740,29 @@ def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
         if not isinstance(req, bool):
             _q_err(source, qid, f"'required' must be a boolean (true/false), got {type(req).__name__}")
         op, output_keys = _validate_query(source, qid, q["query"])
-        _validate_expect(source, qid, op, output_keys, q["query"], q.get("expect") or {})
+        expect = q.get("expect") or {}
+        _validate_expect(source, qid, op, output_keys, q["query"], expect)
         guards = q.get("guards")
         if guards is not None and not isinstance(guards, list):
             _q_err(source, qid, "'guards' must be a list")
         for guard in guards or []:
             _validate_guard(source, qid, guard, op, output_keys)
+        # A required question is a POSITIVE coverage proof, so it must assert a
+        # non-empty expected answer. An empty expected answer with universal
+        # ``require_*`` guards passes vacuously and would count as proof of coverage
+        # while proving nothing (Codex Reviewer A). A deliberate absence /
+        # negative-assertion question is intentionally NOT satisfied this way: mark
+        # it ``required: false`` (non-gating, never cited as ``covered``) rather
+        # than letting an empty required expectation masquerade as coverage. An
+        # explicit absence-query mode remains a deliberate future extension.
+        if req and _expected_answer_is_empty(op, expect):
+            key = _expect_envelope_key(op)
+            _q_err(source, qid,
+                   f"a required (coverage-proof) question must assert a non-empty "
+                   f"expected answer; empty expect.{key} cannot serve as coverage "
+                   f"proof — mark the question 'required: false' if an empty answer "
+                   f"is intended (an explicit absence-assertion mode is deliberately "
+                   f"not accepted here)")
     return questions
 
 
@@ -1293,6 +1383,55 @@ def _evaluate_with_exports(
     return sorted(results, key=lambda r: r["id"])
 
 
+def validate_expected_endpoint_types(
+    exports: dict[tuple, dict[str, Any]], questions: list[dict[str, Any]], source: str
+) -> None:
+    """Reject a path chain whose endpoint node's actual type contradicts the query.
+
+    ``_validate_expected_chain`` relates an expected chain to the constraints
+    resolvable from the registry alone (hops, allowed predicates, id/id_prefix
+    endpoints, confidence), but it cannot know a node's ``entity_type`` without the
+    export (Codex Reviewer A #2: an expected terminal node of type
+    ``system_resource`` was accepted against ``end.entity_type: content_record`` and
+    only failed later as an answer mismatch / exit 1). This DB-aware pass runs after
+    the scoped exports are built and BEFORE evaluation, so a statically-impossible
+    expected endpoint type is a usage error (exit 2) — matching the documented
+    promise that expected chains are validated against their endpoint constraints.
+    """
+    for q in questions:
+        query = q.get("query") or {}
+        if query.get("op") != "path":
+            continue
+        paths = (q.get("expect") or {}).get("paths") or []
+        if not paths:
+            continue
+        info = exports.get((q["client_id"], q["projection"]))
+        if info is None:
+            continue
+        conn = sqlite3.connect(info["db"])
+        try:
+            node_type = {
+                eid: et for eid, et in conn.execute(
+                    "SELECT entity_id, entity_type FROM entities WHERE client_id = ?",
+                    (q["client_id"],),
+                )
+            }
+        finally:
+            conn.close()
+        for path in paths:
+            nodes = path["chain"][0::2]
+            for name, node in (("start", nodes[0]), ("end", nodes[-1])):
+                want = query[name].get("entity_type")
+                if want is None:
+                    continue
+                actual = node_type.get(node)
+                if actual is not None and actual != want:
+                    _q_err(source, q["id"],
+                           f"expect.paths[] {name} node {node!r} has entity_type "
+                           f"{actual!r} in the scoped export, contradicting the "
+                           f"query's {name}.entity_type {want!r}")
+
+
 # --------------------------------------------------------------------------- #
 # Drift-isolation regression (the controlled semantic-drift negative case)
 # --------------------------------------------------------------------------- #
@@ -1809,7 +1948,10 @@ def run_path_shape_probes(tmpdir: Path) -> dict[str, Any]:
     path representation omits relationship IDs, two parallel edges must collapse to
     ONE path, not two indistinguishable duplicates. Also proves a back-edge cannot
     make a simple-path traversal revisit a node (cycle safety / termination),
-    branching yields distinct paths, and repeated runs return byte-identical order.
+    branching yields distinct paths, repeated runs return byte-identical order, and
+    (fix cycle 2, Codex Reviewer A #2) an expected path endpoint whose actual
+    entity_type contradicts the query's start/end constraint is rejected as a usage
+    error before evaluation while the matching case is accepted.
     """
     root = tmpdir / "path-shape-fixture"
     for rel, text in _PATH_SHAPE_FIXTURE.items():
@@ -1867,6 +2009,32 @@ def run_path_shape_probes(tmpdir: Path) -> dict[str, Any]:
         record("stable-ordering", again == deep, again)
     finally:
         conn.close()
+
+    # 5-6. Expected-endpoint entity_type compatibility (Codex Reviewer A #2). The
+    # fixture types a=system_resource and b=content_record. An expected terminal
+    # node whose ACTUAL type contradicts end.entity_type must be a usage error
+    # (exit 2), caught by validate_expected_endpoint_types BEFORE evaluation; the
+    # matching case must be accepted.
+    exports = {("acme", "acme.p"): {"db": db, "meta": {}}}
+
+    def _endpoint_type_check(end_type: str) -> Optional[str]:
+        probe_q = {
+            "id": "probe.endpoint-type", "client_id": "acme", "projection": "acme.p",
+            "query": {"op": "path", "start": {"id": "acme.g.a"}, "end": {"entity_type": end_type},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 1},
+            "expect": {"paths": [{"chain": ["acme.g.a", "contains", "acme.g.b"], "confidences": ["draft"]}]},
+        }
+        try:
+            validate_expected_endpoint_types(exports, [probe_q], "<probe>")
+        except QuestionError as exc:
+            return str(exc)
+        return None
+
+    mismatch = _endpoint_type_check("system_resource")  # b is content_record → reject
+    record("expected-endpoint-type-mismatch-rejected",
+           mismatch is not None and "contradicting" in mismatch, mismatch)
+    match = _endpoint_type_check("content_record")  # b IS content_record → accept
+    record("expected-endpoint-type-match-accepted", match is None, match)
 
     passed = all(c["ok"] for c in cases)
     return {"passed": passed, "cases": cases}
@@ -2139,9 +2307,12 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
                expect={"rows": []})),
          "controlled predicate vocabulary"),
         # The bounded `x_` experimental predicate escape hatch (schema anyOf) is
-        # still accepted, so a deliberate local extension is not a typo.
+        # still accepted, so a deliberate local extension is not a typo. Marked
+        # optional so its intentionally empty expect.rows is allowed (a required
+        # question may not assert an empty answer — see the required-empty probes).
         ("relationships-predicate-x-extension-ok",
-         doc(q(query={"op": "relationships", "filters": {"predicate": "x_experimental"},
+         doc(q(required=False,
+               query={"op": "relationships", "filters": {"predicate": "x_experimental"},
                       "select": ["subject", "predicate", "object"]},
                expect={"rows": []})),
          None),
@@ -2215,6 +2386,69 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
                       "select": ["subject", "predicate", "object", "source_confidence"]},
                expect={"rows": [{"subject": "c.a", "predicate": "uzes", "object": "c.b", "source_confidence": "verified"}]})),
          "controlled predicate vocabulary"),
+        # ---- issue #41 fix cycle 2: per-column operand types, empty required, cycles ----
+        # Codex Reviewer A #1 EXACT repro: a boolean operand on the string column
+        # ``subject`` can never equal a stored id, so it silently drops the filter
+        # and lets a required question pass on []. It must be rejected by type.
+        ("filter-string-column-bool-operand",
+         doc(q(query={"op": "relationships", "filters": {"subject": False},
+                      "select": ["subject", "object"]},
+               expect={"rows": [{"subject": "c.a", "object": "c.b"}]})),
+         "must be a string"),
+        # A number operand on a string column is the same class of false-pass.
+        ("filter-string-column-number-operand",
+         doc(q(query={"op": "entities", "filters": {"entity_id": 7}, "select": ["entity_id", "status"]},
+               expect={"rows": [{"entity_id": "c.x", "status": "draft"}]})),
+         "must be a string"),
+        # An expected-row value on a string column with the wrong type is rejected.
+        ("expect-row-string-column-bool",
+         doc(q(query={"op": "relationships", "filters": {"predicate": "uses"},
+                      "select": ["subject", "object"]},
+               expect={"rows": [{"subject": False, "object": "c.b"}]})),
+         "must be a string"),
+        # Codex Reviewer A #1: the rule ``severity`` column is now controlled, so a
+        # typo'd severity filter must be rejected against the schema enum.
+        ("severity-filter-typo",
+         doc(q(query={"op": "rules", "filters": {"severity": "bloking"},
+                      "select": ["rule_id", "severity"]},
+               expect={"rows": [{"rule_id": "c.r", "severity": "blocking"}]})),
+         "controlled severity vocabulary"),
+        # Codex Reviewer A #1 EXACT repro: a REQUIRED question with an empty expected
+        # answer + universal guards passes vacuously and would count as coverage
+        # proof. It must be rejected as a usage error.
+        ("required-empty-rows-rejected",
+         doc(q(required=True,
+               query={"op": "relationships", "filters": {"predicate": "archived_by"},
+                      "select": ["subject", "object", "source_confidence"]},
+               expect={"rows": []},
+               guards=[{"type": "require_field_in", "field": "source_confidence", "values": ["verified"]}])),
+         "must assert a non-empty"),
+        # The same for a required path question with expect.paths: [] and a vacuous
+        # edge-confidence guard (Codex Reviewer A #1 path variant).
+        ("required-empty-paths-rejected",
+         doc(q(required=True,
+               query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.b"},
+                      "predicates": ["contains"], "min_hops": 1, "max_hops": 2},
+               expect={"paths": []},
+               guards=[{"type": "require_edge_confidence_in", "values": ["draft"]}])),
+         "must assert a non-empty"),
+        # The deliberate distinction is preserved: an OPTIONAL (non-gating, never
+        # cited as `covered`) question MAY assert an empty answer.
+        ("optional-empty-rows-allowed",
+         doc(q(required=False,
+               query={"op": "relationships", "filters": {"predicate": "archived_by"},
+                      "select": ["subject", "object"]},
+               expect={"rows": []})),
+         None),
+        # Integration Auditor #2 EXACT repro: a cyclic expected chain (a -> b -> a)
+        # contradicts the simple-path contract and must fail early as a usage error,
+        # not later as an answer mismatch.
+        ("expect-chain-repeated-node-rejected",
+         doc(q(query={"op": "path", "start": {"id": "c.a"}, "end": {"id": "c.a"},
+                      "predicates": ["contains"], "min_hops": 2, "max_hops": 2},
+               expect={"paths": [{"chain": ["c.a", "contains", "c.b", "contains", "c.a"],
+                                  "confidences": ["draft", "draft"]}]})),
+         "repeats node"),
     ]
 
 
@@ -2352,6 +2586,10 @@ def run(argv: Optional[list] = None) -> int:
         path_shape = run_path_shape_probes(tmpdir)
         try:
             exports = _build_scope_exports(root, questions, tmpdir)
+            # DB-aware fail-early: an expected path endpoint whose actual
+            # entity_type contradicts the query's start/end constraint is a usage
+            # error (exit 2), not a trusted answer mismatch (Codex Reviewer A #2).
+            validate_expected_endpoint_types(exports, questions, args.questions)
         except QuestionError as exc:
             print(json.dumps({"error": str(exc)}) if args.json else f"registry error: {exc}", file=sys.stderr)
             return 2
@@ -2359,6 +2597,7 @@ def run(argv: Optional[list] = None) -> int:
         drift = {"passed": True, "cases": []} if args.no_drift else run_drift_regression(exports, questions, tmpdir)
 
     failed_required = [r for r in results if r["status"] == "fail" and r["required"]]
+    failed_optional = [r for r in results if r["status"] == "fail" and not r["required"]]
     exit_code = 1 if (
         failed_required
         or not drift["passed"]
@@ -2390,8 +2629,20 @@ def run(argv: Optional[list] = None) -> int:
     else:
         _print_human(results, drift, probes, loading, resolver, scope, path_shape)
         if exit_code == 0:
-            print(f"\nall {len(results)} competency question(s) passed; drift isolation + registry shape "
-                  "+ loading isolation + resolver-read isolation + query scope-isolation + path-shape checks hold")
+            required_total = sum(1 for r in results if r["required"])
+            checks = ("drift isolation + registry shape + loading isolation + "
+                      "resolver-read isolation + query scope-isolation + path-shape checks hold")
+            if failed_optional:
+                # A failed OPTIONAL question does not gate the exit code, but the
+                # summary must say so honestly — a blanket "all N passed" read via
+                # `tail -1` would turn a real optional regression into affirmative
+                # evidence that every question passed (Codex Reviewer A #4).
+                names = ", ".join(r["id"] for r in failed_optional)
+                print(f"\nall {required_total} required competency question(s) passed; "
+                      f"{len(failed_optional)} optional question(s) FAILED ({names}); {checks}")
+            else:
+                print(f"\nall {len(results)} competency question(s) passed "
+                      f"({required_total} required, {len(results) - required_total} optional); {checks}")
         else:
             if failed_required:
                 print(f"\nFAILED: {len(failed_required)} required competency question(s) failed", file=sys.stderr)

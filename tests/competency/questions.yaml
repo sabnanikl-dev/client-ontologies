@@ -44,6 +44,17 @@ kind: competency_suite
 # selected, a field guard needs its field selected, a relationship isolation guard
 # needs both endpoints (`subject`,`object`) selected, and edge-confidence guards
 # apply only to a `path` query — so a safety assertion can never silently no-op.
+#
+# A `required: true` question is a POSITIVE coverage proof and MUST assert a
+# non-empty expected answer: an empty expect + universal `require_*` guards would
+# pass vacuously and count as proof of coverage while proving nothing. A
+# deliberately empty answer (a status-awareness / absence-style check) must be
+# `required: false` (non-gating, never cited as `covered` in docs/coverage.md). An
+# explicit absence-query DSL remains a deliberate future extension, not something
+# an empty required expectation may smuggle in. Every filter/expected operand must
+# also be the right TYPE for its column (string columns reject bool/number
+# operands; a controlled predicate/entity_type/source_confidence/status/severity
+# token is validated against the same schema vocabulary the validator enforces).
 # ---------------------------------------------------------------------------
 description: >
   Deterministic competency questions for the live client ontologies. Each
@@ -112,6 +123,39 @@ questions:
       # Only enforceable (active) governance rules may answer this question.
       - {type: require_status, statuses: [active]}
       # Cross-client isolation: no JMD rule may leak into a Femme answer.
+      - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
+
+  # Femme — relationship-independent BUSINESS identity + offering question. Proves
+  # the business-identity coverage cell with a source-backed competency: the brand
+  # identity (verified) and the public service package / offering (approved,
+  # owner-reviewed) are both evidence-backed recorded resources, so the coverage
+  # matrix can cite this instead of merely naming resources no question retrieves.
+  - id: femme-events.competency.business-identity-and-offering
+    client_id: femme-events
+    projection: femme-events.agent-context
+    question: >
+      What is Femme Events' core brand identity, and which public service package
+      (offering) does the client present?
+    rationale: >
+      Protects the strategist/website consumer job: identity and the named public
+      offering must be answered from evidence-backed brand/website resources, not
+      guessed. Both are recorded resources that carry source evidence in their
+      modules, so this is a source-backed business answer.
+    required: true
+    query:
+      op: entities
+      filters:
+        entity_id: [femme-events.brand.identity, femme-events.website.service-package]
+      select: [entity_id, entity_type, status, source_confidence]
+    expect:
+      rows:
+        - {entity_id: femme-events.brand.identity, entity_type: brand_object, status: active, source_confidence: verified}
+        - {entity_id: femme-events.website.service-package, entity_type: business_object, status: approved, source_confidence: owner_reviewed}
+    guards:
+      # These are recorded identity/offering facts, never draft guesswork.
+      - {type: require_field_in, field: status, values: [active, approved]}
+      - {type: require_field_in, field: source_confidence, values: [verified, owner_reviewed]}
+      # Cross-client isolation: no JMD resource may answer a Femme question.
       - {type: forbid_id_prefix, prefixes: [jmd-menswear]}
 
   # ---- JMD Menswear -------------------------------------------------------
@@ -375,6 +419,38 @@ questions:
       - {type: require_field_in, field: source_confidence, values: [verified]}
       # Isolation: no other client's resource may appear.
       - {type: forbid_id_prefix, prefixes: [femme-events]}
+
+  # JMD — BUSINESS identity + differentiator question. Proves the business-identity
+  # coverage cell with a source-backed competency: the brand identity and the durable
+  # one-of-a-kind differentiator are both verified, evidence-backed resources, so the
+  # matrix cites this instead of naming brand resources no question retrieves.
+  - id: jmd-menswear.competency.brand-identity-and-differentiator
+    client_id: jmd-menswear
+    projection: jmd-menswear.website-build
+    question: >
+      What is JMD Menswear's brand identity, and what is its durable one-of-a-kind
+      differentiator?
+    rationale: >
+      Protects the website/strategist consumer job: identity and the durable
+      differentiator must be answered from verified, evidence-backed brand resources
+      rather than inferred, so copy and positioning stay on-brand.
+    required: true
+    query:
+      op: entities
+      filters:
+        entity_id: [jmd-menswear.brand.identity, jmd-menswear.brand.differentiator]
+      select: [entity_id, entity_type, status, source_confidence]
+    expect:
+      rows:
+        - {entity_id: jmd-menswear.brand.identity, entity_type: brand_object, status: active, source_confidence: verified}
+        - {entity_id: jmd-menswear.brand.differentiator, entity_type: brand_object, status: active, source_confidence: verified}
+    guards:
+      # Only the recorded (active) brand facts answer this — a draft cannot.
+      - {type: require_status, statuses: [active]}
+      # This identity/differentiator must be verified, not inferred/draft.
+      - {type: require_field_in, field: source_confidence, values: [verified]}
+      # Isolation: no other client and no inventory resource may appear.
+      - {type: forbid_id_prefix, prefixes: [femme-events, jmd-menswear.inventory]}
 
   # JMD — TECHNICAL system/data-flow AND the required bounded MULTI-HOP question.
   # The Drive→Sanity→showroom image pipeline is a three-hop data flow that is

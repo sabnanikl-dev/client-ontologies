@@ -57,13 +57,24 @@ scanning-and-excluding when a reference points outside `includes.modules`;
 and rejects any path outside `root`). Results are then further scoped through the
 named projection (relationship endpoints and every traversed path node stay in
 scope). Every controlled operand a question names — a relationship/path
-`predicate`, an entity `entity_type`, a `source_confidence`, a `status` — is
-validated against the SAME vocabulary the schema enforces (loaded from
-`schemas/*.schema.json`, with the schema's bounded `x_` predicate escape), the
-`expect` envelope is closed, and each expected path chain is checked against its
-query's hop bounds / allowed predicates / endpoint constraints, so a misspelled
-predicate is a usage error, not a silently-empty answer a required question
-reports as PASS. Parallel edges collapse to one path (the public representation
+`predicate`, an entity `entity_type`, a `source_confidence`, a `status`, a rule
+`severity` — is validated against the SAME vocabulary the schema enforces (loaded
+from `schemas/*.schema.json`, with the schema's bounded `x_` predicate escape);
+every filter/expected operand is also type-checked per column (a bool/number
+against a string column like `subject` is rejected, not silently unmatched); the
+`expect` envelope is closed; and each expected path chain is checked against its
+query's hop bounds / allowed predicates / endpoint constraints, rejects a
+repeated-node (cyclic) chain the simple-path traversal could never return, and —
+once the scoped export exists — rejects an expected endpoint whose actual
+`entity_type` contradicts the query's `start`/`end` constraint. So a misspelled
+predicate or an impossible chain is a usage error, not a silently-empty answer a
+required question reports as PASS. A `required` (coverage-proof) question must
+assert a **non-empty** expected answer — an empty required expectation with
+vacuous guards can never count as coverage; a deliberately empty answer must be
+`required: false` (a future explicit absence-query DSL stays out of scope). A
+failed **optional** question never gates the exit code but is reported honestly
+(the summary says "N required passed; K optional FAILED", never a blanket
+"all passed"). Parallel edges collapse to one path (the public representation
 carries no edge identity). Six regressions back it: **loading-isolation** and
 **resolver-read isolation** (both instrument the ACTUAL `parse_yaml` calls — not
 just returned path lists — to prove no scoped load reaches another client or opens
@@ -72,15 +83,19 @@ synthetic full export proves, at the result boundary, that a relationship endpoi
 in an excluded module is dropped and a bounded path never traverses an out-of-scope
 node, a disallowed predicate, or beyond its hop bound), **path-shape** (a synthetic
 fixture proves parallel edges dedupe to one path, a back-edge cannot revisit a node
-on a simple path, branching yields distinct paths, and ordering is deterministic),
-**drift-isolation** (a single controlled mutation — a status, a projection
-membership, a relationship confidence, or a path-edge confidence — fails only the
-relevant question), and **registry shape-validation** (a malformed question —
-including a non-string `id`/`client_id`/`projection`, a non-boolean `required`, a
-guard not bound to a selected output column, a non-scalar filter operand, a typo'd
-`predicate`/`entity_type`/`source_confidence`/`status` token, a stray/unknown
-`expect` key, an expected chain that contradicts its query, or a malformed `path`
-contract — is rejected as a usage error / exit 2 before any answer is trusted).
+on a simple path, branching yields distinct paths, ordering is deterministic, and
+an expected endpoint's `entity_type` must match the query's constraint), **drift-
+isolation** (a single controlled mutation — a status, a projection membership, a
+relationship confidence, or a path-edge confidence — fails only the relevant
+question), and **registry shape-validation** (a malformed question — including a
+non-string `id`/`client_id`/`projection`, a non-boolean `required`, a required
+question with an empty expected answer, a guard not bound to a selected output
+column, a non-scalar or wrong-typed filter operand, a typo'd
+`predicate`/`entity_type`/`source_confidence`/`status`/`severity` token, a
+stray/unknown `expect` key, an expected chain that contradicts its query (a
+disallowed predicate, a bad hop count, a mismatched endpoint, or a repeated node),
+or a malformed `path` contract — is rejected as a usage error / exit 2 before any
+answer is trusted).
 Expected answers live only in the registry, so a consumer (issue #19) can reuse
 the corpus via `evaluate_suite(db_path, questions)` to prove YAML/SQLite parity
 without re-encoding them; the relationship/`path` ops are test-owned and their
