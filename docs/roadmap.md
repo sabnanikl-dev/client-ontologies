@@ -1,277 +1,260 @@
 # Implementation Roadmap
 
-This roadmap sequences the **open** repository issues in dependency order so work lands
-as small, reviewable changes rather than a large undifferentiated batch. It covers the
-core runtime path, governance and modeling work, deterministic outcome/competency
-testing, the optional LangExtract experiment, and trigger-gated future work.
+> **Status:** live planning document for the open GitHub issue set.
+> **Canonical truth:** client YAML under `clients/`; this roadmap is not ontology data.
+> **Last reconstructed against:** `main` at `e1fdeb450ffc28b2348bfcbfcdf64f72e14fe130` and the open issue set through #44.
 
-This file is planning documentation, not canonical ontology truth. GitHub Issues remain
-the implementation contracts, and this roadmap must be refreshed whenever the open
-issue set or dependency graph changes.
+This roadmap sequences work toward an evidence-backed **client operating ontology** that contains durable, relevant business and technical semantics and can be queried safely by agents, scripts, UIs, and future adapters.
+
+The CLI's copy checker is one enforcement operation—not the product boundary. The target system must support six distinct capabilities:
+
+1. **canonical modeling and client coverage** — what exists, what it means, how it relates, and what evidence supports it;
+2. **competency and usefulness** — which business/technical questions the ontology must answer and whether answers stay correct;
+3. **read-only runtime consumption** — projection-scoped access to entities, relationships, modules, rules, approvals, actions, and state transitions;
+4. **governance and kinetic semantics** — approval gates, action requirements, and guarded transitions without granting execution authority;
+5. **reviewed source intake** — collection, classification, reconciliation, human review, and safe patch proposals;
+6. **speculative retrieval/adapters** — GraphRAG/vector retrieval, MCP, or HTTP only when separately justified and tracked.
+
+GitHub Issues remain the implementation contracts. Refresh this file whenever the open issue set, dependencies, or trigger gates change.
+
+## Core boundary
+
+The ontology should contain durable semantics:
+
+- business definitions, offerings, roles, ownership, and operating constraints;
+- systems, repositories, domains, environments, systems of record, integrations, and data-flow meaning;
+- relationships, policies, metric definitions, lifecycle, actions, approvals, and state transitions;
+- status, confidence, provenance, and evidence.
+
+It should **reference rather than duplicate** raw CRM leads, inventory instances, analytics events, CMS bodies, GitHub/Linear task state, private exports, credentials, or secrets. If a datum defines how the business interprets or governs an event, it may belong canonically; if it is merely one operational instance, it belongs in its source system.
+
+## Three maturity dimensions
+
+Do not conflate these:
+
+1. **Model representation** — the schema can describe a concept.
+2. **Client coverage** — a specific client ontology actually contains sufficient evidence-backed resources to answer the needed question.
+3. **Runtime queryability** — a supported consumer can retrieve that answer with correct scope, status, evidence, and provenance.
+
+A table in SQLite is not automatically a usable consumer surface. A schema field is not proof that current client coverage is sufficient.
 
 ## Delivery policy
 
 Per [`AGENTS.md`](../AGENTS.md):
 
-- Work one issue at a time: one issue, one branch, one focused PR.
-- Builders do not self-approve or merge.
-- Update the relevant ontology docs in the same PR when concepts, schema, validation,
-  export behavior, or consumer semantics change.
-- Do not open a stack of implementation PRs merely because several issues are ready.
-- Reconstruct current repo and issue state before starting; this file records the
-  recommended order, but the assigned issue remains the acceptance contract.
+- one issue, one branch, one focused PR;
+- builders do not self-approve or merge;
+- update relevant docs in the same PR when concepts, schema, validation, export, or consumer semantics change;
+- canonical YAML remains reviewed truth; generated SQLite and intake staging remain non-canonical;
+- no issue grants deploy, account mutation, publishing, client-facing send, or automatic canonical-write authority;
+- reconstruct live repo, issue, PR, and dependency state before starting work;
+- keep hard dependencies separate from recommended sequencing and trigger gates.
 
-Recommended branch prefixes remain `docs/issue-N`, `ontology/issue-N`,
-`schema/issue-N`, `scripts/issue-N`, `fix/issue-N`, or `chore/issue-N`.
+Recommended branch prefixes remain `docs/issue-N`, `ontology/issue-N`, `schema/issue-N`, `scripts/issue-N`, `fix/issue-N`, or `chore/issue-N`.
 
 ## Completed foundations
 
-These issues are **closed and delivered**; they are not active queue work and are listed
-only because later issues build on them:
+These delivered issues anchor the open work:
 
-- **#1** — per-client `ontology.yaml` manifests as the reviewable entry point.
-- **#2** — split, enforced per-kind JSON Schemas.
-- **#3** — CI plus regression tests for validation and SQLite export.
-- **#21** — shared manifest-aware loader (`scripts/ontology_loader.py`) used by both the
-  validator and exporter.
-- **#11** — deterministic `machine_check` copy/safety rule execution (`scripts/check_rules.py`).
-- **#31** — the shared competency-question corpus and deterministic outcome runner
-  (`tests/competency/questions.yaml` + `tests/run_competency.py`), reused by #19.
-- **#19** — the read-only runtime consumer surface: shared transport-agnostic service
-  (`scripts/ontology_service.py`) + stdlib CLI (`scripts/ontology_cli.py`), YAML and
-  SQLite backends, `ontology` / `ontology-mcp` console entry points (`pyproject.toml`).
-- **#25** — the `metric` entity type modeled against real Femme local-visibility outcomes
-  (`draft`/`baseline: unknown` where no snapshot exists).
-- **#26** — corrected agent-facing `CLAUDE.md` guidance.
-- **#32** — separated the live `docs/spec.md` contract from design history and normalized
-  this roadmap to current state.
-- **#23** — portable evidence anchors and the deterministic evidence-health check
-  (`scripts/check_evidence.py`).
-- **#22** — constrained relationship semantics: controlled predicate vocabulary,
-  cardinality, `inverse`, and bounded domain/range.
+- **#1** — per-client `ontology.yaml` manifests.
+- **#2** — split, enforced schemas by resource kind.
+- **#3** — CI and regression tests for validation/SQLite export.
+- **#21** — shared manifest-aware YAML loader.
+- **#11** — deterministic machine-check rule execution.
+- **#22** — controlled relationship predicates, cardinality, inverse vocabulary, and bounded domain/range checks.
+- **#23** — portable evidence anchors and evidence-health reporting.
+- **#25** — metric entity proof against real Femme outcome definitions.
+- **#26** — corrected agent-facing orientation.
+- **#31** — projection-scoped competency-question corpus and deterministic outcome runner.
+- **#32** — normative spec/history separation and prior roadmap normalization.
+- **#19** — shared read-only runtime service + CLI with YAML/SQLite parity, projection isolation, and five v1 operations.
+
+Runtime v1 is a foundation, not the final query surface. It currently exposes clients, entity/rule context, rules, copy checks, and projections; relationships and later approval/action/state resources need the open work below.
+
+## Live open-issue coverage
+
+Every currently open issue is listed here.
+
+| Issue | Track | Role / current gate |
+|---:|---|---|
+| **#44** | Roadmap | This docs-only refresh; closes through the roadmap PR and changes no implementation/canonical data. |
+| **#40** | Reliability | Prove installed entry points at Python 3.10 and synchronize README maps/tests. Independent and first in queue. |
+| **#41** | Coverage + competency | Define mature-client business/technical question families and add relationship/multi-hop deterministic competency contracts. |
+| **#42** | Runtime consumption | Add projection-scoped entity, relationship, module, and workstream queries over the shared YAML/SQLite service. Depends on #41. |
+| **#9** | Governance | First-class approval gates/records plus read-only runtime access. Runtime portion follows #42. |
+| **#8** | Provenance | Projection/export provenance, build metadata, and versioned SQLite artifact distribution. Recommended after #9 in the governance sequence. |
+| **#4** | Kinetic semantics | Evidence-backed actions, risk/side effects/preconditions, governing gates, and read-only requirement evaluation. Depends on #9; runtime extension uses #42. |
+| **#10** | Workflow semantics | Validate/export/query state machines and approval-gated public-boundary transitions. Guard layer depends on #9 and follows #4. |
+| **#24** | Onboarding | Deterministic draft-by-default scaffold before the next real client. Independent; pull forward if onboarding is imminent. |
+| **#43** | Intake | Parent tracker for collect → normalize → classify/sanitize → reconcile → review → propose → verify. Begins from #41's salient-question contract. |
+| **#27** | Optional intake experiment | Isolated LangExtract toolchain only; one extractor lane under #43, not the intake architecture. |
+| **#28** | Optional intake experiment | Sanitized source-grounded extraction pilot; hard-blocked by #27 and must end continue/narrow/stop. |
+| **#5** | Trigger-gated modeling | Shared interfaces/properties only after a third client or demonstrated duplication/God-object pain. |
+| **#12** | Trigger-gated handoff | Client-safe Markdown handoff generation; recommended after #5 and benefits from #8, but generation never permits sending. |
+| **#6** | Trigger-gated maintenance | Lifecycle, deprecation, impact, and health reporting; recommended after #5/#12. |
+| **#7** | Speculative retrieval | **DO NOT BUILD YET.** Requires #41/#42 plus a measured structured-query failure and benchmark win without weaker correctness/traceability/privacy. |
 
 ## Hard dependency map
 
-Delivered prerequisites are marked `(done)`; they still anchor the graph because open
-work depends on them.
+Arrows below mean an issue cannot satisfy its full current acceptance contract before the prerequisite lands. Trigger gates and recommended ordering are listed separately.
 
 ```text
-#21 shared loader (done) -> #11 machine checks (done) -> #19 runtime surface (done)
-#21 shared loader (done) -> #31 competency corpus (done) .. reused by #19 runtime surface (done)
+#31 competency foundation (done) -> #41 coverage + multi-hop competency
+#19 runtime foundation (done) ----> #42 broad read-only queries
+#41 ------------------------------> #42
+#41 ------------------------------> #43 intake architecture
 
-#9 approval gates -> #8 provenance
-#9 approval gates -> #4 actions -> #10 state-machine guards
-#9 approval gates ---------------------> #10 state-machine guards
+#42 runtime extension pattern ----> #9 approval runtime integration
+#9 approval gates ----------------> #4 actions / requirement evaluation
+#9 approval gates ----------------> #10 transition guards
+#4 actions -----------------------> #10 guarded state transitions
 
-#27 optional LangExtract toolchain -> #28 bounded pilot
+#27 optional LangExtract toolchain -> #28 bounded extraction pilot
 
-#5 interfaces/shared properties -> #12 handoffs -> #6 lifecycle/cleanup
-
-#19 runtime/MCP surface + #31 competency corpus -> explicit prerequisites to #7 activation
-    (activation also requires a measured full-load/filtered-SQLite failure + sanitized
-     gold source highlights; these gate activation, they do not authorize implementation)
+#41 + #42 + measured structured-query failure
+    + sanitized benchmark/gold spans -> #7 activation review
 ```
 
-Issue #24 has no hard implementation dependency, but its placement below avoids rework
-and reduces risk for later agents. (The formerly-queued #22 and #23, also dependency-free,
-are now delivered.)
+Issue #24 has no implementation dependency. Issue #5 is not a hard dependency of onboarding: it activates only after a third client or real duplication pressure appears.
 
-**Soft sequencing, not hard dependencies:**
+## Recommended sequencing that is not a hard dependency
 
-- **#31** (competency-question corpus) landed *before #19 closed*, as recommended, so the
-  runtime surface proves normalized YAML/SQLite answer parity against the shared corpus and
-  #19 reuses it (both now delivered). This was a recommended sequencing/reuse gate, not a
-  code-level hard dependency.
-- **#24** (new-client scaffolding) and **#5** (interfaces/shared properties) are linked
-  only by soft, recommended sequencing. #24 is independent and recommended before
-  onboarding the next client, while #5 is trigger-gated: it starts when a third client
-  lands *or* concrete cross-client duplication/God-object pain appears. Onboarding a
-  third client does not automatically require #5.
+- **#9 → #8** keeps approval governance and runtime provenance together; #8 has independent implementation seams but should not displace the active coverage/query path.
+- **#5 → #12 → #6** remains a maturity sequence, not permission to build #5 before its trigger.
+- Client-specific coverage follow-ups discovered by #41 may run after #41 as focused one-client PRs. They should use current entity/relationship/field shapes first and create new kinds/interfaces only when evidence shows model pressure.
+- #43 is a parent tracker. Its normalized-source, checkpoint, classification, reconciliation, review-packet, and patch-proposal slices require separate child issues/PRs.
+- #27/#28 may move earlier only when the optional extraction experiment is the explicit active priority. They do not block deterministic intake-contract work that has no LangExtract dependency.
 
 ## Recommended execution queue
 
-The queue below lists the remaining **open** issues, with recently delivered work kept as
-✅ rows for continuity. The documentation-normalization issue **#32**, portable evidence
-anchors **#23**, and relationship-semantics constraints **#22** are all delivered (see
-Completed foundations); the current open governance work begins at **#9**.
-
-| Order | Issue | Work | Why here / gate |
-|---:|---:|---|---|
-| ✅ | **#31** *(delivered)* | Competency-question traceability and deterministic semantic outcome tests | Delivered. Shared outcome-usefulness corpus (test metadata, not a canonical kind); reused by #19 to prove YAML/SQLite answer parity. |
-| ✅ | **#19** *(delivered)* | Read-only runtime core and CLI | Delivered. Clients, context, projections, rules, and copy checks through one shared transport-agnostic service; YAML and SQLite backends; `ontology`/`ontology-mcp` entry points. Reuses #31's corpus to prove consumer operations. |
-| ✅ | **#32** *(delivered)* | Separate the live contract from design history; normalize this roadmap | Delivered. `docs/spec.md` is normative and current; design history relocated; this roadmap tracks live state. |
-| ✅ | **#23** *(delivered)* | Portable evidence anchors and evidence-health reporting | Delivered. `scripts/check_evidence.py` re-hashes portable anchors without conflating citation health with resource lifecycle. |
-| ✅ | **#22** *(delivered)* | Constrain relationship predicates, cardinality, and inverse names | Delivered. Controlled predicate vocabulary + bounded domain/range (the #25 metric work exercises predicates such as `measures`). |
-| 1 | **#9** | Make approval gates and records first-class | Governance foundation; blocks #4 and the approval-guard portion of #10. |
-| 4 | **#8** | Add projection provenance and runtime build metadata | Follows #9 in the governance layer and lets consumers identify the ontology state behind projections and exports. |
-| 7 | **#4** | Model actions, functions, and agent-exposed operations | Requires #9. Modeling an operation makes it discoverable, never automatically executable. |
-| 8 | **#10** | Validate/export state machines and add transition guards | Planned after #4; guard behavior requires #9. Validation/export may be split first only if #9 is unexpectedly delayed. |
-| 9 | **#24** | Add deterministic new-client scaffolding | Reuse #21's loader and land before onboarding a third real client. |
-| 10 | **#27** | Add the isolated optional LangExtract toolchain | Begins an optional experimental lane without adding dependencies to canonical validation/export. |
-| 11 | **#28** | Pilot source-grounded candidate extraction on Femme and JMD fixtures | Hard-blocked by #27; must end in a measured continue, narrow, or stop decision and must not write canonical truth automatically. |
-| 12 | **#5** | Add interfaces and shared properties | Trigger-gated: start only when a third client lands or concrete duplication/God-object pain appears. |
-| 13 | **#12** | Generate client-safe handoff packages | Planned after #5; benefits from #8 provenance and #21's loader even though neither is a strict technical blocker. |
-| 14 | **#6** | Add lifecycle, impact, deprecation, and cleanup workflows | Last in the planned #5 -> #12 -> #6 modeling-hygiene sequence. Keep separate from #23's evidence-health checks. |
-| 15 | **#7** | Represent semantic retrieval resources | Explicitly last and speculative; **DO NOT BUILD YET**. Activation requires #19's runtime/CLI surface **and** #31's competency-question corpus as explicit prerequisites, plus a measured full-load/filtered-SQLite failure and sanitized gold source highlights — an evidence/benchmark gate, not an implementation authorization. Reassess after #19/MCP exists; close or replace it if retrieval belongs in the service layer rather than canonical projection YAML. |
+| Order | Issue | Outcome / gate |
+|---:|---:|---|
+| Current | **#44** | Refresh this roadmap only; open PR, do not merge without separate approval. |
+| 1 | **#40** | Lock installed CLI reliability and contributor docs before adding commands. |
+| 2 | **#41** | Define coverage/usefulness through deterministic business, technical, relationship, and multi-hop competency questions. |
+| 3 | **#42** | Make current entity/relationship/module semantics queryable through the supported service/CLI. |
+| 4 | **#9** | Structure and expose approval gates/records without creating standing authority. |
+| 5 | **#8** | Add projection/export provenance and a pinned SQLite distribution contract. |
+| 6 | **#4** | Model and query action requirements after gates exist; no executor. |
+| 7 | **#10** | Validate/export/query state machines and guarded public-boundary transitions. |
+| 8 | **#24** | Make the next client scaffold deterministic and draft by default. |
+| 9 | **#43** | Activate the intake parent and file focused foundation child issues. |
+| 10 | **#27** | Install/smoke the optional extractor lane without changing canonical runtime dependencies. |
+| 11 | **#28** | Measure extraction on sanitized Femme/JMD fixtures and decide continue/narrow/stop. |
+| 12 | **#5** | Trigger only after demonstrated shared-property/interface pressure. |
+| 13 | **#12** | Generate client-safe, provenance-aware handoff drafts after maturity trigger. |
+| 14 | **#6** | Add lifecycle/deprecation/impact health after the model/handoff surface stabilizes. |
+| 15 | **#7** | Last/speculative; build only after its strengthened activation gate passes. |
 
 ## Pull-forward rules
 
-The table is the default queue, not a reason to ignore changed business context:
-
-- If source-grounded intake is the active experiment, **#27 -> #28** may move earlier in
-  the queue. Keep both PRs isolated from the canonical runtime dependency path.
-- If a third client is imminent, move **#24** forward. Start **#5** only after onboarding
-  exposes actual shared-property or interface pressure.
-- Independent quality work **#24** may fill a deliberate gap, but should not delay the
-  active governance path without a concrete reason. (The #19 runtime path is delivered.)
-- Do not start **#4** or approval-guarded **#10** work before #9.
-- #19 closed only after **#31**'s corpus could exercise its consumer operations — the
-  runtime surface reuses that corpus to prove YAML/SQLite answer parity (both delivered).
-- Do not pull **#7** forward while full-projection loading remains sufficient at current
-  scale.
+- If a third client is imminent, pull **#24** forward. Do not automatically activate #5 unless onboarding demonstrates duplication or inconsistent fields.
+- If existing client work exposes an evidence-backed coverage gap after #41, create one focused client/module issue; do not bundle unrelated clients or invent facts to make the matrix green.
+- If source intake is the active mission, activate **#43** and create its normalized-source/reconciliation child contracts before choosing a production extraction model.
+- If #27/#28 run early, preserve their isolation: no connector authority, canonical writes, auto-promotion, or GraphRAG.
+- Do not start #4 before #9. Do not complete #10's guard layer before #9/#4.
+- Do not activate #7 while #41/#42's deterministic full-load/SQLite modes answer the required questions adequately.
 
 ## Phases and completion gates
 
-### Phase 0 — Agent hygiene, a small authoring proof, and a current contract
+### Phase 0 — Roadmap and installed-runtime reliability
 
-Issues: **#26 (done) -> #25 (done) -> #32 (done)**
-
-Exit gate:
-
-- Agent-facing guidance matches the current manifest, schema, validator, export, test,
-  and CI reality. *(#26, delivered.)*
-- The `metric` resource type has one validator-compliant use — modeled honestly against
-  the evidence that exists (`draft`/`unknown` where the source names no baseline or
-  snapshot, evidence-cited where it does). *(#25, delivered.)*
-- `docs/spec.md` is normative and current, design history and the original source
-  inventory are relocated under `docs/research/`, future ideas are marked
-  proposed/trigger-gated, this roadmap tracks only live open issues, and all agent-facing
-  contract surfaces agree on the four resource kinds, live paths, and commands.
-  *(#32, delivered.)*
-
-### Phase 1 — Shared foundations, outcome corpus, and runtime v1
-
-Issues: **#21 (done) -> #11 (done) -> #31 (done) -> #19 (done)**
+Issues: **#44 → #40**
 
 Exit gate:
 
-- Validator, exporter, and new consumers share one manifest-aware loader. *(#21, delivered.)*
-- Machine checks have deterministic positive and negative coverage. *(#11, delivered.)*
-- A competency-question corpus deterministically proves consumers still get correct,
-  status-aware answers, with a controlled negative case for semantic drift. *(#31, delivered.)*
-- A read-only CLI exposes the agreed v1 operations without granting mutation authority,
-  reusing the competency corpus to prove YAML/SQLite answer parity. *(#19, delivered.)*
+- every live open issue is represented without fabricated dependencies;
+- installed `ontology`/`ontology-mcp` entry points are tested at the declared Python floor;
+- README map/test commands match the shipped runtime;
+- no MCP implementation is implied by the placeholder entry point.
 
-### Phase 2 — Governance and semantic integrity
+### Phase 1 — Coverage specification and broad read-only consumption
 
-Issues: **#9 -> #8 -> #23 (done) -> #22 (done)**
+Issues: **#41 → #42**
 
 Exit gate:
 
-- Approval gates, scoped approval records, provenance, evidence health, and relationship
-  semantics are machine-checkable and exported where specified. *(Evidence health #23 and
-  relationship semantics #22 are delivered; approval gates #9 and provenance #8 remain
-  open.)*
-- Approval records remain evidence of one scoped past approval, never standing authority
-  for future actions.
+- coverage families distinguish model capability, actual client coverage, and runtime queryability;
+- each client has relationship-backed business and technical competency questions;
+- at least one bounded multi-hop question is deterministic and projection isolated;
+- installed/service consumers can list/get scoped entities, relationships, modules, and workstreams with YAML/SQLite parity;
+- relationships remain modeled/queryable before any semantic-retrieval work.
 
-### Phase 3 — Kinetic and workflow semantics
+### Phase 2 — Governance, provenance, actions, and state transitions
 
-Issues: **#4 -> #10**
-
-Exit gate:
-
-- Actions and state transitions are queryable, validated, and approval-aware.
-- Defining or exposing an action does not authorize a runtime mutation.
-- Any MCP `list_actions` or `check_action_allowed` extension remains read-only unless a
-  separately approved runtime authority design exists.
-
-### Phase 4 — Onboarding and bounded intake experiments
-
-Issues: **#24**, then optional **#27 -> #28**
+Recommended sequence: **#9 → #8 → #4 → #10**
 
 Exit gate:
 
-- A third client can be scaffolded deterministically without copying an existing client.
-- If the LangExtract lane is run, its report records misses, false positives, reviewer
-  effort, cost visibility, security observations, and an explicit continue/narrow/stop
-  decision.
+- approval gates/records are validated, exported, queryable, and never treated as standing authority;
+- consumers can identify the ontology/build state behind projections and SQLite snapshots;
+- actions expose requirements/risk/side effects without execution authority;
+- state transitions, public boundaries, and approval guards are validated and queryable;
+- #41 competency outcomes cover the new resource types without duplicating expected answers in service code.
 
-### Phase 5 — Trigger-gated modeling maturity
+### Phase 3 — Client onboarding and reviewed intake
 
-Issues: **#5 -> #12 -> #6**
+Issues: **#24**, then parent **#43** with focused children; optional **#27 → #28**
+
+Exit gate:
+
+- a third client can be scaffolded without copied facts and validates draft by default;
+- intake sources normalize into privacy/authority-classified records outside canonical YAML;
+- comments/material are classified before fact extraction;
+- candidates reconcile as matching/new/changed/conflicting/stale/rejected with source anchors;
+- unresolved conflicts remain review staging, not silently chosen canonical truth;
+- review packets and patch proposals fail closed and require a human-reviewed PR;
+- if LangExtract is tested, the report records misses, false positives, exact-span quality, reviewer effort, cost/security observations, and continue/narrow/stop.
+
+### Phase 4 — Trigger-gated modeling maturity and handoff
+
+Issues: **#5 → #12 → #6** only after trigger
 
 Start gate:
 
-- A third client exists or concrete cross-client duplication makes interfaces/shared
-  properties useful now.
+- a third client or concrete cross-client duplication/consumer failure proves shared interfaces/properties are useful now.
 
 Exit gate:
 
-- Shared concepts are modeled without premature taxonomy sprawl.
-- Handoff exports are client-safe and provenance-aware.
-- Lifecycle and cleanup reports identify stale, deprecated, or orphaned resources without
-  deleting anything automatically.
+- shared concepts reduce proven drift without taxonomy/God-object sprawl;
+- client-safe handoff drafts are provenance-aware and human-gated;
+- lifecycle/health reports identify deprecated, stale, or orphaned resources without deleting automatically.
 
-### Phase 6 — Speculative retrieval and later adapters
+### Phase 5 — Speculative retrieval and later adapters
 
-Issue: **#7**, plus any separately filed HTTP adapter work.
+Issue: **#7**; MCP/HTTP require separately filed issues.
 
-Before implementing #7, compare its proposed projection metadata with the runtime/MCP
-surface delivered by #19. Current default retrieval remains full projection loading;
-semantic retrieval is opt-in only when scale or a real consumer requires it. Retrieved
-snippets are context, never evidence for a verified claim.
+Before #7 can start, #41/#42 must establish and measure the deterministic baseline. A real consumer must show an explicit correctness, context-budget, or latency failure; sanitized source highlights and competency assertions must define the benchmark; semantic/hybrid retrieval must materially beat the activating baseline without weakening answer correctness, projection isolation, evidence traceability, or privacy.
 
-Per issue #7, #7 is explicitly **DO NOT BUILD YET**. Its live activation gate makes both
-**#19** (runtime/CLI surface, to measure current consumer behavior) and **#31** (the
-competency-question corpus that defines the consumer questions retrieval must support)
-explicit prerequisites to activation — not merely related issues. Activation additionally
-requires a real consumer demonstrating a measured full-load or filtered-SQLite failure
-(accuracy, context-budget, or latency) and sanitized gold source highlights identifying
-the exact source spans. This is an evidence/benchmark gate on *when the work may start*;
-it does not authorize implementation, and it is distinct from #31's soft
-sequencing/reuse relationship with #19 recorded above.
+If the structured modes remain sufficient, keep `full_load`/filtered SQLite and close or continue deferring #7. GraphRAG/vector retrieval is not a substitute for modeling relationships or exposing them through the service.
 
-## Runtime consumer surface shape
+The `ontology-mcp` entry point remains a fail-closed placeholder. There is currently no open MCP implementation issue, so this roadmap does not call it “the next PR.” Any future MCP or HTTP adapter must be thin, read-only by default, reuse `ontology_service.py`, and preserve the same competency/isolation contracts.
 
-One shared, stdlib-first core with thin adapters keeps transport choices additive:
+## Remaining design gaps and decision rules
 
-```text
-scripts/ontology_loader.py   -- load + resolve projections (stdlib, #21, delivered)
-scripts/check_rules.py       -- machine_check engine (stdlib, #11, delivered)
-scripts/ontology_service.py  -- transport-agnostic operations, plain JSON dicts (#19, delivered)
-        |
-        +-- scripts/ontology_cli.py       <- v1: CI / hooks / local consumers (#19, delivered)
-        +-- server/ontology_mcp.py        <- next: thin isolated MCP adapter
-        +-- server/ontology_api.py        <- later: separately scoped HTTP adapter
-```
+### Client-specific coverage gaps
 
-Runtime v1 is read-only and **delivered** (#19): the shared core + CLI, YAML and SQLite
-backends, and the `ontology` / `ontology-mcp` console entry points (`pyproject.toml`). The
-CLI, the future MCP adapter, and the shared core live in this repository, co-located with
-the schema and data they interpret. Consumers install or register that implementation
-rather than reimplementing parser and guardrail logic downstream. The `ontology-mcp` entry
-point is registered for packaging completeness; the MCP stdio adapter itself
-(`server/ontology_mcp.py`) is the next PR.
+#41 should reveal these through a matrix and failed/unanswered competency questions. File focused, evidence-backed client issues only after the gap is observed. Do not pre-create one module per category or force every category onto every client.
 
-For an agentic-harness consumer such as Femme Visibility:
+### Typed properties and per-property evidence
 
-- Pin the in-repo consumer package by tag or commit for provenance.
-- Use MCP as an agent-facing query surface when appropriate.
-- Use the CLI as the deterministic CI or pre-publication enforcement surface.
-- Consume the generated SQLite projection when a Ruby-free runtime path is required.
-- Keep YAML authoring and canonical validation in this repository.
+`fields` remains intentionally flexible at two clients. #5 provides an extension point for shared properties/interfaces, but typed per-property confidence/evidence deserves a separate issue only after concrete field drift, review ambiguity, UI-form pressure, or competency failure demonstrates the need.
 
-## Remaining untracked design gap
+### Intake conflict representation
 
-The currently open issues cover new-client scaffolding (#24), governance and provenance
-(#9, #8), actions and state machines (#4, #10), handoff and lifecycle hygiene (#12, #6),
-interfaces (#5), the LangExtract experiment (#27–#28), and speculative retrieval (#7).
-Deterministic outcome/competency testing (#31), the runtime surface (#19), relationship
-semantics (#22), evidence portability (#23), metric modeling (#25), agent-doc drift
-(#26), and this roadmap/spec normalization (#32) are delivered.
+#43 stages divergent claims with source/temporal context for human reconciliation. Do not add a canonical `conflicted` status or generic automatic contradiction detector until repeated real cases prove unresolved conflict is durable ontology truth rather than intake state.
 
-One material gap remains only partially covered: typed properties with per-property
-evidence and confidence. Issue #5 provides a possible extension point, but a separate
-issue should be filed only after real client data demonstrates that free-form entity
-fields are causing review or consumer failures.
+### Technical architecture modeling
+
+Use current evidence-backed entities (`system_resource`, `workflow_artifact`, business/governance objects), relationships, and fields for repositories, domains, applications, stores, integrations, ownership, and data flows. Add new canonical kinds only when current shapes fail explicit competency or consumer requirements.
+
+## Roadmap maintenance check
+
+Before merging a roadmap refresh:
+
+1. query the live open issue set;
+2. verify every open issue number appears explicitly in this document;
+3. separate hard dependencies from recommended sequence and activation triggers;
+4. ensure closed foundations are not presented as active work;
+5. verify no stale “next PR” or untracked implementation claim remains;
+6. keep the PR roadmap-only and run the canonical validation/export/test suite.
