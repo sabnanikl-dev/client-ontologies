@@ -37,15 +37,19 @@ business/governance competency questions. Loading is **projection/client-directe
 shared loader/export path (never the repo's `build/`) from only the named
 client's manifest, `client.yaml`, the named projection, and the modules that
 projection references — never another client's files and never a module the
-projection excludes (`resolve_scope_paths` computes the file set;
-`export_sqlite.export(..., paths=...)` reuses the same `parse_yaml`/table shapes).
-Results are then further scoped through the named projection. Three regressions
-back it: **loading-isolation** (no scoped load reaches another client or an
-excluded module), **drift-isolation** (a single controlled mutation fails only
-the relevant question), and **registry shape-validation** (a malformed
-question — including a guard not bound to a selected output column or a
-non-scalar filter operand — is rejected as a usage error / exit 2 before any
-answer is trusted). Expected answers live only in the registry, so a consumer
+projection excludes (`resolve_scope_paths` computes the file set — widening to
+the full single-client module set rather than scanning-and-excluding when a
+reference points outside `includes.modules`; `export_sqlite.export(..., paths=...)`
+reuses the same `parse_yaml`/table shapes and rejects any path outside `root`).
+Results are then further scoped through the named projection. Four regressions
+back it: **loading-isolation** and **resolver-read isolation** (both instrument
+the ACTUAL `parse_yaml` calls — not just returned path lists — to prove no scoped
+load reaches another client or opens a module the projection excludes),
+**drift-isolation** (a single controlled mutation fails only the relevant
+question), and **registry shape-validation** (a malformed question — including a
+non-string `id`/`client_id`/`projection`, a non-boolean `required`, a guard not
+bound to a selected output column, or a non-scalar filter operand — is rejected
+as a usage error / exit 2 before any answer is trusted). Expected answers live only in the registry, so a consumer
 (issue #19) can reuse the corpus via `evaluate_suite(db_path, questions)` to
 prove YAML/SQLite parity without re-encoding them. It needs no model, network,
 API credential, or live client system.

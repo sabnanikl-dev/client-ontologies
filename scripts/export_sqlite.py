@@ -152,6 +152,24 @@ def insert_evidence(conn: sqlite3.Connection, client_id: str, owner_id: str, ite
         )
 
 
+def _confine_paths(root: Path, paths: list[Path]) -> list[Path]:
+    """Resolve a caller-pinned scoped file set and reject anything outside ``root``.
+
+    The scoped-export contract documents that ``paths`` must stay under ``root``;
+    enforce it here (rather than trusting the caller) so a stray/injected path
+    like ``/etc/hosts`` is rejected with a ``ValueError`` BEFORE it is handed to
+    ``parse_yaml``. Returns the resolved, confined paths in the given order.
+    """
+    root_r = root.resolve()
+    confined: list[Path] = []
+    for p in paths:
+        pr = Path(p).resolve()
+        if pr != root_r and root_r not in pr.parents:
+            raise ValueError(f"export path {p} escapes root {root_r}")
+        confined.append(pr)
+    return confined
+
+
 def export(root: Path, output: Path, paths: list[Path] | None = None) -> None:
     """Export canonical YAML into ``output``.
 
@@ -160,53 +178,61 @@ def export(root: Path, output: Path, paths: list[Path] | None = None) -> None:
     those files are parsed and exported — a client/projection-directed load that
     reuses the identical shared parser (``parse_yaml``) and table shapes, so a
     caller (e.g. the competency runner, issue #31) can build a scoped export
-    without scanning every client's YAML. ``paths`` must stay under ``root``.
+    without scanning every client's YAML. ``paths`` MUST stay under ``root``;
+    out-of-root paths are rejected (``ValueError``) before any parse. The SQLite
+    connection is always closed, even if parsing/inserting raises mid-export.
     """
+    root_r = root.resolve()
+    if paths is not None:
+        paths = _confine_paths(root, paths)
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         output.unlink()
     conn = sqlite3.connect(output)
-    init_db(conn)
+    try:
+        init_db(conn)
 
-    # Enumerate via the shared loader (full export) unless the caller pinned an
-    # explicit scoped file set. Either way parsing goes through parse_yaml.
-    if paths is None:
-        documents = load_documents(root)
-    else:
-        documents = {p: parse_yaml(p) for p in paths}
-    for path, data in documents.items():
-        kind = data.get("kind")
-        if kind == "ontology":
-            conn.execute(
-                "INSERT INTO manifests VALUES (?, ?, ?, ?)",
-                (data.get("client_id"), data["id"], data.get("status"), dump(data)),
-            )
-        elif kind == "client":
-            client_id = data["id"]
-            conn.execute("INSERT INTO clients VALUES (?, ?, ?, ?, ?, ?)", (client_id, data.get("name"), data.get("status"), data.get("client_type"), str(path.relative_to(root)), dump(data)))
-            insert_sources(conn, client_id, client_id, data.get("source_registry", []))
-        elif kind == "ontology_module":
-            client_id = data["client_id"]
-            module_id = data["id"]
-            conn.execute("INSERT INTO modules VALUES (?, ?, ?, ?, ?, ?)", (client_id, module_id, data.get("title"), data.get("status"), str(path.relative_to(root)), dump(data)))
-            insert_sources(conn, client_id, module_id, data.get("evidence_sources", []))
-            for ent in data.get("entities", []) or []:
-                conn.execute("INSERT INTO entities VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (client_id, module_id, ent.get("id"), ent.get("label"), ent.get("entity_type"), ent.get("status"), ent.get("source_confidence"), 1 if ent.get("public_facing") else 0, dump(ent)))
-                insert_evidence(conn, client_id, module_id, ent.get("id"), "entity", ent.get("evidence", []))
-            for rel in data.get("relationships", []) or []:
-                conn.execute("INSERT INTO relationships VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (client_id, module_id, rel.get("id"), rel.get("subject"), rel.get("predicate"), rel.get("object"), rel.get("source_confidence"), dump(rel)))
-                insert_evidence(conn, client_id, module_id, rel.get("id"), "relationship", rel.get("evidence", []))
-            for rule in data.get("rules", []) or []:
-                conn.execute("INSERT INTO rules VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (client_id, module_id, rule.get("id"), rule.get("title"), rule.get("status"), rule.get("severity"), rule.get("rule_type"), rule.get("statement"), rule.get("source_confidence"), dump(rule)))
-                insert_evidence(conn, client_id, module_id, rule.get("id"), "rule", rule.get("evidence", []))
-        elif kind == "projection":
-            client_id = data["client_id"]
-            projection_id = data["id"]
-            target = data.get("projection_target") or {}
-            conn.execute("INSERT INTO projections VALUES (?, ?, ?, ?, ?, ?, ?)", (client_id, projection_id, target.get("type"), data.get("status"), dump(data.get("includes", {})), str(path.relative_to(root)), dump(data)))
-            insert_sources(conn, client_id, projection_id, data.get("evidence_sources", []))
-    conn.commit()
-    conn.close()
+        # Enumerate via the shared loader (full export) unless the caller pinned an
+        # explicit scoped file set. Either way parsing goes through parse_yaml.
+        if paths is None:
+            documents = load_documents(root)
+        else:
+            documents = {p: parse_yaml(p) for p in paths}
+        for path, data in documents.items():
+            rel_path = str(path.resolve().relative_to(root_r))
+            kind = data.get("kind")
+            if kind == "ontology":
+                conn.execute(
+                    "INSERT INTO manifests VALUES (?, ?, ?, ?)",
+                    (data.get("client_id"), data["id"], data.get("status"), dump(data)),
+                )
+            elif kind == "client":
+                client_id = data["id"]
+                conn.execute("INSERT INTO clients VALUES (?, ?, ?, ?, ?, ?)", (client_id, data.get("name"), data.get("status"), data.get("client_type"), rel_path, dump(data)))
+                insert_sources(conn, client_id, client_id, data.get("source_registry", []))
+            elif kind == "ontology_module":
+                client_id = data["client_id"]
+                module_id = data["id"]
+                conn.execute("INSERT INTO modules VALUES (?, ?, ?, ?, ?, ?)", (client_id, module_id, data.get("title"), data.get("status"), rel_path, dump(data)))
+                insert_sources(conn, client_id, module_id, data.get("evidence_sources", []))
+                for ent in data.get("entities", []) or []:
+                    conn.execute("INSERT INTO entities VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (client_id, module_id, ent.get("id"), ent.get("label"), ent.get("entity_type"), ent.get("status"), ent.get("source_confidence"), 1 if ent.get("public_facing") else 0, dump(ent)))
+                    insert_evidence(conn, client_id, module_id, ent.get("id"), "entity", ent.get("evidence", []))
+                for rel in data.get("relationships", []) or []:
+                    conn.execute("INSERT INTO relationships VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (client_id, module_id, rel.get("id"), rel.get("subject"), rel.get("predicate"), rel.get("object"), rel.get("source_confidence"), dump(rel)))
+                    insert_evidence(conn, client_id, module_id, rel.get("id"), "relationship", rel.get("evidence", []))
+                for rule in data.get("rules", []) or []:
+                    conn.execute("INSERT INTO rules VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (client_id, module_id, rule.get("id"), rule.get("title"), rule.get("status"), rule.get("severity"), rule.get("rule_type"), rule.get("statement"), rule.get("source_confidence"), dump(rule)))
+                    insert_evidence(conn, client_id, module_id, rule.get("id"), "rule", rule.get("evidence", []))
+            elif kind == "projection":
+                client_id = data["client_id"]
+                projection_id = data["id"]
+                target = data.get("projection_target") or {}
+                conn.execute("INSERT INTO projections VALUES (?, ?, ?, ?, ?, ?, ?)", (client_id, projection_id, target.get("type"), data.get("status"), dump(data.get("includes", {})), rel_path, dump(data)))
+                insert_sources(conn, client_id, projection_id, data.get("evidence_sources", []))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def main() -> int:

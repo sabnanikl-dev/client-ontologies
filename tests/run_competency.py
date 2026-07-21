@@ -21,11 +21,15 @@ Design contract (issue #31):
     question names one client and one projection, the runner builds a SCOPED
     export per ``(client_id, projection_id)``: it reads only that client's
     manifest, ``client.yaml``, the named projection, and the module files that
-    projection actually pulls into scope (``includes.modules`` plus any module
-    that owns an entity/rule the projection references). It never parses another
-    client's files, and never parses the client's other projections or modules
-    the projection does not reference. ``resolve_scope_paths`` computes this file
-    set and ``run_loading_isolation_probes`` asserts nothing outside it leaks in.
+    projection actually pulls into scope (``includes.modules``; if a reference
+    points at a module outside ``includes.modules`` the scope widens to the full
+    single-client module set rather than scanning-and-excluding other modules).
+    It never parses another client's files, and never PARSES a module the
+    projection excludes — reference resolution only ever opens in-scope modules.
+    ``resolve_scope_paths`` computes this file set; ``run_loading_isolation_probes``
+    and ``run_resolver_read_isolation_probe`` instrument the ACTUAL ``parse_yaml``
+    calls (not just the returned path list) to prove nothing outside scope — no
+    other client and no excluded module — is ever opened.
   * Scopes each query's RESULTS strictly through the named projection on top of
     the scoped export. An ``entities``/``rules`` query surfaces a row only if it
     belongs to the question's ``client_id`` AND its module is in the projection's
@@ -38,8 +42,9 @@ Design contract (issue #31):
   * Emits a human-readable report by default and machine JSON with ``--json``;
     on a failed question it names the question and shows expected vs actual.
   * Exits non-zero when any REQUIRED question fails, the drift-isolation
-    regression fails, the registry shape-validation probes fail, or the
-    loading-isolation probes detect cross-client / unrelated-module leakage.
+    regression fails, the registry shape-validation probes fail, the
+    loading-isolation probes detect cross-client / unrelated-module leakage, or
+    the resolver-read isolation probe observes an excluded module being parsed.
 
 Reuse seam for issue #19: import ``load_questions`` and
 ``evaluate_suite(db_path, questions)`` (or the lower-level ``evaluate_question``
@@ -287,13 +292,31 @@ def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
     for q in questions:
         if not isinstance(q, dict):
             raise QuestionError(f"{source}: each question must be a mapping")
-        for field in ("id", "client_id", "projection", "query"):
-            if not q.get(field):
-                raise QuestionError(f"{source}: question missing required field {field!r}: {q.get('id')!r}")
+        # Envelope identity fields must be non-empty STRINGS. A mapping- or
+        # list-valued id/client_id/projection previously slipped past a bare
+        # truthiness check and then crashed with a raw ``TypeError`` (unhashable
+        # dict in ``seen``, or ``root / client_id`` during path resolution) at
+        # exit 1 instead of a structured QuestionError / exit 2 (Integration
+        # Auditor). Validate the full envelope BEFORE any hashing, path
+        # resolution, or evaluation.
+        for field in ("id", "client_id", "projection"):
+            val = q.get(field)
+            if not isinstance(val, str) or not val:
+                raise QuestionError(
+                    f"{source}: each question needs a non-empty string {field!r}; got {val!r}"
+                )
+        if q.get("query") is None:
+            raise QuestionError(f"{source}: question {q['id']!r} missing required field 'query'")
         qid = q["id"]
         if qid in seen:
             raise QuestionError(f"{source}: duplicate question id: {qid}")
         seen.add(qid)
+        # ``required`` gates the exit code; a non-boolean (e.g. ``required: 0``)
+        # would let a FAILING required question be treated as optional and exit
+        # 0 (Codex Reviewer A). Enforce a real boolean before evaluation.
+        req = q.get("required", True)
+        if not isinstance(req, bool):
+            _q_err(source, qid, f"'required' must be a boolean (true/false), got {type(req).__name__}")
         op, output_keys = _validate_query(source, qid, q["query"])
         _validate_expect(source, qid, op, output_keys, q.get("expect") or {})
         guards = q.get("guards")
@@ -613,15 +636,25 @@ def resolve_scope_paths(root: Path, client_id: str, projection_id: str) -> tuple
     Projection/client-directed loading (issue #31 AC): reads the named client's
     manifest to discover module/projection membership, then returns ONLY the
     manifest, ``client.yaml``, the named projection, and the module files that
-    projection pulls into scope — ``includes.modules`` plus any client module
-    that owns an entity/rule the projection references (a ``.*`` wildcard falls
-    back to the client's full module set, still single-client). It never reads
-    another client's files and never reads the client's other projections or
-    modules the projection does not reference. Raises ``QuestionError`` for an
-    unknown client/projection or a manifest that mislabels either — a structured
+    projection pulls into scope — ``includes.modules`` plus, when the projection
+    references an entity/rule owned by a module that is NOT in ``includes.modules``
+    (or uses a ``.*`` wildcard), the client's full (still single-client) module
+    set. It never reads another client's files, and it never PARSES a module the
+    projection excludes: reference resolution only ever parses modules already in
+    scope, and if that is not enough to resolve every referenced id it widens to
+    the full client module set rather than scanning-and-excluding other modules
+    (which would parse a file it then reports as excluded — Codex Reviewer A).
+    Raises ``QuestionError`` for an unknown client/projection, a client_id that
+    escapes ``clients/``, or a manifest that mislabels either — a structured
     usage error, not a silent empty answer.
     """
-    cdir = root / "clients" / client_id
+    clients_root = (root / "clients").resolve()
+    cdir = (clients_root / client_id).resolve()
+    # Containment: a registry-derived client_id must name a direct child of
+    # clients/ (reject ``..`` traversal, nested paths, absolute paths) BEFORE any
+    # file is opened.
+    if cdir.parent != clients_root:
+        raise QuestionError(f"invalid client_id {client_id!r}: must be a direct child of clients/")
     manifest_path = cdir / "ontology.yaml"
     if not manifest_path.is_file():
         raise QuestionError(f"unknown client {client_id!r}: no manifest at {manifest_path}")
@@ -650,15 +683,18 @@ def resolve_scope_paths(root: Path, client_id: str, projection_id: str) -> tuple
         # A wildcard can span modules we cannot resolve statically; load the full
         # (still single-client) module set to keep the answer complete.
         needed = set(module_paths)
-    else:
-        defined = _collect_ids([module_paths[m] for m in needed])
-        unresolved = [p for p in patterns if p not in defined]
-        if unresolved:
-            for mid, mpath in module_paths.items():
-                if mid in needed:
-                    continue
-                if any(p in _collect_ids([mpath]) for p in unresolved):
-                    needed.add(mid)
+    elif patterns:
+        # Resolve explicit entity/rule references by parsing ONLY the in-scope
+        # (``needed``) modules. If every referenced id is defined there, the scope
+        # is already complete and nothing else is read. If some referenced id is
+        # owned by a module NOT in ``includes.modules``, we do NOT scan the other
+        # modules to locate its owner — that would parse a module we then exclude,
+        # breaking the "never parses an excluded module" guarantee (Codex Reviewer
+        # A). Instead widen to the full single-client module set, so every module
+        # we parse stays in scope (and nothing is both parsed and excluded).
+        defined = _collect_ids([module_paths[m] for m in sorted(needed)])
+        if any(p not in defined for p in patterns):
+            needed = set(module_paths)
 
     ordered = [manifest_path, cdir / "client.yaml"]
     ordered += [module_paths[m] for m in sorted(needed)]
@@ -666,12 +702,16 @@ def resolve_scope_paths(root: Path, client_id: str, projection_id: str) -> tuple
     ordered = [p for p in ordered if p.is_file()]
 
     excluded_modules = sorted(mid for mid in module_paths if mid not in needed)
+    # ``ordered`` paths are resolved (via ``_safe_join``/resolved ``cdir``); make
+    # the repo-relative view robust to a caller passing an unresolved ``root``
+    # (e.g. a symlinked temp dir on macOS) by resolving both sides.
+    root_r = root.resolve()
     meta = {
         "client_id": client_id,
         "projection": projection_id,
         "needed_module_ids": sorted(needed),
         "excluded_module_ids": excluded_modules,
-        "parsed_files": [str(p.relative_to(root)) for p in ordered],
+        "parsed_files": [str(p.resolve().relative_to(root_r)) for p in ordered],
     }
     return ordered, meta
 
@@ -803,48 +843,207 @@ def run_drift_regression(
 # --------------------------------------------------------------------------- #
 # Loading-isolation regression (projection-directed loading instrumentation)
 # --------------------------------------------------------------------------- #
-def run_loading_isolation_probes(root: Path, questions: list[dict[str, Any]]) -> dict[str, Any]:
-    """Instrument each question's scope and prove loading is projection/client-directed.
+def _record_parse_calls(fn):
+    """Run ``fn()`` while recording every actual ``parse_yaml(path)`` call.
 
-    For every question this resolves the exact file set the scoped export parses
-    and asserts (a) no file outside the named client's directory is read — no
-    other client is scanned — and (b) every client module the projection does NOT
-    reference is excluded from the parsed set. This is the direct, measurable
-    refutation of the "parses 9 Femme + 9 JMD files" finding: a Femme question now
-    parses only Femme files, and a projection that excludes a module never reads
-    it. Deterministic and read-only; no export or DB needed.
+    The shared parser is bound by name in three places (``ontology_loader``, this
+    runner, and ``export_sqlite``); wrap all three so we capture the REAL file
+    opens made during scope resolution AND the scoped export — not just the paths
+    a function returns. This is what lets the loading-isolation regression prove a
+    module the projection excludes is never parsed, closing the gap Codex Reviewer
+    A found (the prior probe trusted the returned path list and missed the
+    excluded-module reads inside ``resolve_scope_paths``). Returns
+    ``(result, recorded_paths)`` and always restores the originals.
+    """
+    import ontology_loader as _ol
+    this_mod = sys.modules[__name__]
+    targets = [t for t in (this_mod, e, _ol) if hasattr(t, "parse_yaml")]
+    real = _ol.parse_yaml
+    recorded: list[Path] = []
+
+    def wrapper(path):
+        recorded.append(Path(path))
+        return real(path)
+
+    saved = [(m, m.parse_yaml) for m in targets]
+    for m in targets:
+        m.parse_yaml = wrapper
+    try:
+        result = fn()
+    finally:
+        for m, orig in saved:
+            m.parse_yaml = orig
+    return result, recorded
+
+
+def run_loading_isolation_probes(root: Path, questions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Instrument each question's ACTUAL parse calls and prove loading is scoped.
+
+    For every question this resolves the scope AND builds the real scoped export
+    while instrumenting every ``parse_yaml`` file open (via ``_record_parse_calls``),
+    then asserts, at the true parse boundary, that (a) no file outside the named
+    client's directory is opened — no other client is scanned — and (b) no module
+    the projection excludes is opened, even transiently during reference
+    resolution. Basing the assertion on observed parses (not the returned path
+    list) is the direct refutation of the "parses 9 Femme + 9 JMD files" finding
+    and of the resolver-read gap: a Femme question opens only Femme files, and a
+    projection that excludes a module never reads it. Deterministic; the export is
+    built in a throwaway temp dir (never the repo's build/).
     """
     client_dirs = sorted(p.name for p in (root / "clients").glob("*") if p.is_dir())
     cases: list[dict[str, Any]] = []
     passed = True
-    for q in questions:
-        _paths, meta = resolve_scope_paths(root, q["client_id"], q["projection"])
-        rels = meta["parsed_files"]
-        prefix = f"clients/{q['client_id']}/"
-        foreign_files = sorted(r for r in rels if not r.startswith(prefix))
-        foreign_clients = sorted(
-            c for c in client_dirs
-            if c != q["client_id"] and any(r.startswith(f"clients/{c}/") for r in rels)
-        )
-        # Every excluded module's file must be absent from the parsed set.
-        excluded_leaked = sorted(
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
+        for i, q in enumerate(questions):
+            def _resolve_and_export(q=q, i=i):
+                paths, meta = resolve_scope_paths(root, q["client_id"], q["projection"])
+                db = tmpdir / f"loadprobe-{i}.sqlite"
+                e.export(root, db, paths=paths)
+                return meta
+
+            meta, recorded = _record_parse_calls(_resolve_and_export)
+            allowed = set(meta["parsed_files"])
+            # Actual observed parses, repo-relative. Anything not in the declared
+            # scope file set is a real leak (foreign client OR excluded module).
+            observed = sorted({str(p.resolve().relative_to(root.resolve())) for p in recorded})
+            leaked_files = sorted(r for r in observed if r not in allowed)
+            prefix = f"clients/{q['client_id']}/"
+            foreign_files = sorted(r for r in observed if not r.startswith(prefix))
+            foreign_clients = sorted(
+                c for c in client_dirs
+                if c != q["client_id"] and any(r.startswith(f"clients/{c}/") for r in observed)
+            )
+            excluded_leaked = sorted(
+                mid for mid in meta["excluded_module_ids"]
+                if any(r.endswith(f"{mid.split('.')[-1]}.yaml") and "/modules/" in r for r in leaked_files)
+            )
+            ok = not leaked_files and not foreign_files and not foreign_clients and not excluded_leaked
+            passed = passed and ok
+            cases.append(
+                {
+                    "id": q["id"],
+                    "client_id": q["client_id"],
+                    "projection": q["projection"],
+                    "parsed_file_count": len(observed),
+                    "declared_scope_files": meta["parsed_files"],
+                    "observed_parsed_files": observed,
+                    "needed_module_ids": meta["needed_module_ids"],
+                    "excluded_module_ids": meta["excluded_module_ids"],
+                    "leaked_files": leaked_files,
+                    "foreign_files": foreign_files,
+                    "foreign_clients_touched": foreign_clients,
+                    "excluded_modules_leaked": excluded_leaked,
+                    "ok": ok,
+                }
+            )
+    return {"passed": passed, "cases": cases}
+
+
+# --------------------------------------------------------------------------- #
+# Resolver-read isolation regression (synthetic; the excluded-module scan case)
+# --------------------------------------------------------------------------- #
+_RESOLVER_FIXTURE = {
+    "clients/acme/ontology.yaml": (
+        'schema_version: "0.1"\nkind: ontology\nid: acme.ontology\nclient_id: acme\n'
+        "status: active\nmodules:\n"
+        "  - {path: modules/brand.yaml, id: acme.brand}\n"
+        "  - {path: modules/operations.yaml, id: acme.operations}\n"
+        "  - {path: modules/inventory.yaml, id: acme.inventory}\n"
+        "projections:\n"
+        "  - {path: projections/tight.yaml, id: acme.tight}\n"
+        "  - {path: projections/widen.yaml, id: acme.widen}\n"
+    ),
+    "clients/acme/client.yaml": (
+        'schema_version: "0.1"\nkind: client\nid: acme\nname: Acme\nstatus: active\n'
+    ),
+    "clients/acme/modules/brand.yaml": (
+        'schema_version: "0.1"\nkind: ontology_module\nid: acme.brand\nclient_id: acme\n'
+        "entities: [{id: acme.brand.voice, label: v, entity_type: brand_object}]\n"
+    ),
+    "clients/acme/modules/operations.yaml": (
+        'schema_version: "0.1"\nkind: ontology_module\nid: acme.operations\nclient_id: acme\n'
+        "entities: [{id: acme.operations.boundary, label: b, entity_type: governance_object}]\n"
+    ),
+    "clients/acme/modules/inventory.yaml": (
+        'schema_version: "0.1"\nkind: ontology_module\nid: acme.inventory\nclient_id: acme\n'
+        "entities: [{id: acme.inventory.image, label: i, entity_type: system_resource}]\n"
+    ),
+    # tight: every reference resolves inside includes.modules → excluded modules
+    # (brand, inventory) stay out of scope AND must never be parsed.
+    "clients/acme/projections/tight.yaml": (
+        'schema_version: "0.1"\nkind: projection\nid: acme.tight\nclient_id: acme\n'
+        "status: active\nincludes:\n  modules: [acme.operations]\n"
+        "  entities: [acme.operations.boundary]\n"
+    ),
+    # widen: references an entity owned by a module NOT in includes.modules →
+    # the resolver widens to the full single-client set instead of scanning and
+    # excluding (which would parse an excluded file).
+    "clients/acme/projections/widen.yaml": (
+        'schema_version: "0.1"\nkind: projection\nid: acme.widen\nclient_id: acme\n'
+        "status: active\nincludes:\n  modules: [acme.operations]\n"
+        "  entities: [acme.inventory.image]\n"
+    ),
+}
+
+
+def run_resolver_read_isolation_probe(tmpdir: Path) -> dict[str, Any]:
+    """Prove ``resolve_scope_paths`` never PARSES a module the projection excludes.
+
+    The four live questions all reference ids owned by modules already in
+    ``includes.modules``, so the resolver never has to look elsewhere for them.
+    This synthetic single-client fixture exercises the two remaining resolver
+    paths under ACTUAL ``parse_yaml`` instrumentation — the gap Codex Reviewer A
+    found, where the prior loading probe trusted the returned path list and missed
+    excluded-module reads during resolution:
+
+      * ``tight`` — a projection whose references all resolve inside
+        ``includes.modules``; the two excluded modules (brand, inventory) must be
+        neither in scope nor parsed during resolution.
+      * ``widen`` — a projection referencing an entity owned by a module NOT in
+        ``includes.modules``; the resolver widens to the full single-client set
+        (so nothing is both parsed and excluded) and pulls the referenced module
+        into scope, keeping the answer complete.
+    """
+    root = tmpdir / "resolver-fixture"
+    for rel, text in _RESOLVER_FIXTURE.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+    expectations = [
+        # name, projection id, modules that must be excluded, module that must be in scope
+        ("tight", "acme.tight", ["acme.brand", "acme.inventory"], "acme.operations"),
+        ("widen", "acme.widen", [], "acme.inventory"),
+    ]
+    cases: list[dict[str, Any]] = []
+    passed = True
+    for name, pid, expect_excluded, must_be_in_scope in expectations:
+        def _resolve(pid=pid):
+            paths, meta = resolve_scope_paths(root, "acme", pid)
+            return meta
+
+        meta, recorded = _record_parse_calls(_resolve)
+        observed = sorted({str(p.resolve().relative_to(root.resolve())) for p in recorded})
+        excluded_parsed = sorted(
             mid for mid in meta["excluded_module_ids"]
-            if any(r.endswith(f"{mid.split('.')[-1]}.yaml") and "/modules/" in r for r in rels)
+            if any(r.endswith(f"modules/{mid.split('.')[-1]}.yaml") for r in observed)
         )
-        ok = not foreign_files and not foreign_clients and not excluded_leaked
+        excluded_ok = meta["excluded_module_ids"] == expect_excluded
+        scope_ok = must_be_in_scope in meta["needed_module_ids"]
+        no_excluded_parse = not excluded_parsed
+        ok = excluded_ok and scope_ok and no_excluded_parse
         passed = passed and ok
         cases.append(
             {
-                "id": q["id"],
-                "client_id": q["client_id"],
-                "projection": q["projection"],
-                "parsed_file_count": len(rels),
-                "parsed_files": rels,
+                "name": name,
+                "projection": pid,
                 "needed_module_ids": meta["needed_module_ids"],
                 "excluded_module_ids": meta["excluded_module_ids"],
-                "foreign_files": foreign_files,
-                "foreign_clients_touched": foreign_clients,
-                "excluded_modules_leaked": excluded_leaked,
+                "observed_parsed_files": observed,
+                "excluded_modules_parsed": excluded_parsed,
+                "expected_excluded": expect_excluded,
+                "module_expected_in_scope": must_be_in_scope,
                 "ok": ok,
             }
         )
@@ -884,6 +1083,18 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
     return [
         # Valid control — the shape validator must accept a well-formed question.
         ("valid-control", doc(q(guards=[{"type": "forbid_id_prefix", "prefixes": ["other"]}])), None),
+        # Integration Auditor exact repro: a mapping-valued `id` must fail as a
+        # QuestionError BEFORE it is hashed into `seen` (previously an unhashable
+        # dict → raw TypeError / exit 1).
+        ("id-not-a-string", doc(q(id={"oops": 1})), "non-empty string 'id'"),
+        # Integration Auditor exact repro: a mapping-/list-valued `client_id` must
+        # fail before path resolution (previously `root / client_id` → TypeError).
+        ("client-id-not-a-string", doc(q(client_id=["c"])), "non-empty string 'client_id'"),
+        # A non-string `projection` must fail before scope resolution.
+        ("projection-not-a-string", doc(q(projection=3)), "non-empty string 'projection'"),
+        # Codex Reviewer A exact repro: a non-boolean `required` (e.g. `0`) could
+        # make a FAILING required question exit 0; reject it up front.
+        ("required-not-a-boolean", doc(q(required=0)), "'required' must be a boolean"),
         # Reviewer A / Auditor follow-up: a non-mapping query (`query: nope`) must
         # be a QuestionError, not an AttributeError traceback.
         ("query-not-a-mapping", doc(q(query="nope")), "'query' must be a mapping"),
@@ -979,6 +1190,7 @@ def _print_human(
     drift: dict[str, Any],
     probes: dict[str, Any],
     loading: dict[str, Any],
+    resolver: dict[str, Any],
 ) -> None:
     print("Competency questions\n" + "=" * 20)
     for r in results:
@@ -1011,6 +1223,12 @@ def _print_human(
             print(f"       foreign files={case['foreign_files']} "
                   f"foreign clients={case['foreign_clients_touched']} "
                   f"excluded leaked={case['excluded_modules_leaked']}")
+    print("\nResolver-read isolation regression (synthetic; instrumented parses)\n" + "-" * 65)
+    for case in resolver["cases"]:
+        mark = "PASS" if case["ok"] else "FAIL"
+        print(f"[{mark}] {case['name']} ({case['projection']}): "
+              f"needed={case['needed_module_ids']} excluded={case['excluded_module_ids']}; "
+              f"excluded modules parsed={case['excluded_modules_parsed']}")
 
 
 def run(argv: Optional[list] = None) -> int:
@@ -1044,6 +1262,10 @@ def run(argv: Optional[list] = None) -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
+        # Synthetic resolver-read isolation regression: prove resolution never
+        # PARSES a module the projection excludes (Codex Reviewer A), instrumented
+        # at the real parse boundary on a throwaway fixture.
+        resolver = run_resolver_read_isolation_probe(tmpdir)
         try:
             exports = _build_scope_exports(root, questions, tmpdir)
         except QuestionError as exc:
@@ -1053,7 +1275,13 @@ def run(argv: Optional[list] = None) -> int:
         drift = {"passed": True, "cases": []} if args.no_drift else run_drift_regression(exports, questions, tmpdir)
 
     failed_required = [r for r in results if r["status"] == "fail" and r["required"]]
-    exit_code = 1 if (failed_required or not drift["passed"] or not probes["passed"] or not loading["passed"]) else 0
+    exit_code = 1 if (
+        failed_required
+        or not drift["passed"]
+        or not probes["passed"]
+        or not loading["passed"]
+        or not resolver["passed"]
+    ) else 0
 
     if args.json:
         print(json.dumps(
@@ -1065,16 +1293,17 @@ def run(argv: Optional[list] = None) -> int:
                 "drift_regression": drift,
                 "registry_probes": probes,
                 "loading_isolation": loading,
+                "resolver_read_isolation": resolver,
                 "exit_code": exit_code,
             },
             ensure_ascii=False,
             indent=2,
         ))
     else:
-        _print_human(results, drift, probes, loading)
+        _print_human(results, drift, probes, loading, resolver)
         if exit_code == 0:
             print(f"\nall {len(results)} competency question(s) passed; drift isolation + registry shape "
-                  "+ loading isolation checks hold")
+                  "+ loading isolation + resolver-read isolation checks hold")
         else:
             if failed_required:
                 print(f"\nFAILED: {len(failed_required)} required competency question(s) failed", file=sys.stderr)
@@ -1086,6 +1315,9 @@ def run(argv: Optional[list] = None) -> int:
             if not loading["passed"]:
                 bad = [c["id"] for c in loading["cases"] if not c["ok"]]
                 print(f"FAILED: loading-isolation regression detected cross-client/unrelated-module leakage: {bad}", file=sys.stderr)
+            if not resolver["passed"]:
+                bad = [c["name"] for c in resolver["cases"] if not c["ok"]]
+                print(f"FAILED: resolver-read isolation regression parsed an excluded module: {bad}", file=sys.stderr)
     return exit_code
 
 
