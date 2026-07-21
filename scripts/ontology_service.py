@@ -116,6 +116,16 @@ def load_dataset(
 
 
 def _load_from_yaml(root: Path) -> Dataset:
+    # Fail closed when pointed at something that is not a client-ontologies
+    # checkout: an installed consumer that runs the default ``--source yaml
+    # --root .`` inside its OWN repo must get a structured error, not a silent
+    # empty (and therefore vacuously "clean") result (Codex Reviewer A/B).
+    if not (root / "clients").is_dir():
+        raise ServiceError(
+            f"no ontology found under {root}: expected a 'clients/' directory. "
+            f"Point --root at a client-ontologies checkout, or use "
+            f"--source sqlite --sqlite-path <pinned export>."
+        )
     ds = Dataset(read_mode="yaml", root=root)
     try:
         docs = load_documents(root)
@@ -129,7 +139,129 @@ def _load_from_yaml(root: Path) -> Dataset:
             ds.modules[data["id"]] = data
         elif kind == "projection" and data.get("id"):
             ds.projections[data["id"]] = data
+    if not ds.clients:
+        raise ServiceError(
+            f"no client ontologies found under {root}: not a client-ontologies "
+            f"checkout (a 'clients/' directory exists but declares no clients)."
+        )
     return ds
+
+
+# The complete set of tables ``scripts/export_sqlite.py`` writes. A backend that
+# is missing any of them is not a full export (foreign / partial / drifted).
+_REQUIRED_EXPORT_TABLES = (
+    "manifests", "clients", "modules", "entities", "relationships",
+    "rules", "projections", "sources", "evidence",
+)
+
+
+def _validate_export(conn: sqlite3.Connection) -> None:
+    """Authenticate a SQLite backend as a genuine, internally consistent export.
+
+    The prior loader queried only three tables and trusted each ``raw_json`` — so
+    a schema-compatible foreign/drifted database (e.g. the three queried tables
+    with a forged client and empty module rules) was accepted, silently disabling
+    the very blocking guardrails ``check_copy`` enforces (Codex Reviewer A/B,
+    Integration Auditor). Before any operation can read the backend, prove:
+
+      1. every table the exporter writes is present (not a partial/foreign DB);
+      2. the core tables are non-empty (an empty DB is not a real ontology);
+      3. each row's primary-id column agrees with its ``raw_json`` ``id`` (no
+         forged/mismatched row-id vs raw-id), and its ``client_id`` names a real
+         client in this same export (no orphan/foreign ownership);
+      4. the normalized ``rules``/``entities`` tables agree exactly with the
+         rules/entities embedded in the module ``raw_json`` the service actually
+         reads — so a snapshot whose module documents were emptied or tampered
+         (to suppress a blocking rule) fails as internally inconsistent.
+
+    Any failure raises ``ServiceError`` (mapped to a structured, non-zero CLI
+    error). Genuine exports produced by ``export_sqlite.py`` always pass.
+    """
+    existing = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    missing = [t for t in _REQUIRED_EXPORT_TABLES if t not in existing]
+    if missing:
+        raise ServiceError(
+            "SQLite backend is not a complete client-ontologies export: missing "
+            f"table(s) {missing}. Rebuild it with scripts/export_sqlite.py."
+        )
+    for table in ("manifests", "clients"):
+        count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if not count:
+            raise ServiceError(
+                f"SQLite backend has an empty {table!r} table: empty or foreign "
+                f"export. Rebuild it with scripts/export_sqlite.py."
+            )
+
+    def _raw(table: str, row_id: Any, raw: Any) -> dict[str, Any]:
+        try:
+            doc = json.loads(raw) if raw else {}
+        except json.JSONDecodeError as exc:
+            raise ServiceError(f"{table}.{row_id}: corrupt raw_json ({exc})")
+        if not isinstance(doc, dict):
+            raise ServiceError(f"{table}.{row_id}: raw_json is not a resource document")
+        return doc
+
+    client_ids: set = set()
+    for cid, raw in conn.execute("SELECT client_id, raw_json FROM clients"):
+        doc = _raw("clients", cid, raw)
+        if doc.get("id") != cid:
+            raise ServiceError(
+                f"clients row {cid!r} disagrees with its raw_json id "
+                f"{doc.get('id')!r}: drifted/tampered export."
+            )
+        client_ids.add(cid)
+
+    for table, id_col in (
+        ("modules", "module_id"),
+        ("projections", "projection_id"),
+        ("entities", "entity_id"),
+        ("rules", "rule_id"),
+    ):
+        for row_id, owner, raw in conn.execute(
+            f"SELECT {id_col}, client_id, raw_json FROM {table}"
+        ):
+            doc = _raw(table, row_id, raw)
+            if doc.get("id") != row_id:
+                raise ServiceError(
+                    f"{table} row {row_id!r} disagrees with its raw_json id "
+                    f"{doc.get('id')!r}: drifted/tampered export."
+                )
+            if owner not in client_ids:
+                raise ServiceError(
+                    f"{table} row {row_id!r} references unknown client {owner!r}: "
+                    f"foreign or internally inconsistent export."
+                )
+
+    # Cross-check the normalized rule/entity tables against the module documents
+    # the service reads at runtime. A real export writes each rule/entity into
+    # BOTH places; if they disagree the snapshot is inconsistent (a suppressed
+    # blocking rule is exactly this shape) and must fail closed.
+    norm_rules = {r[0] for r in conn.execute("SELECT rule_id FROM rules")}
+    norm_entities = {r[0] for r in conn.execute("SELECT entity_id FROM entities")}
+    raw_rules: set = set()
+    raw_entities: set = set()
+    for (raw,) in conn.execute("SELECT raw_json FROM modules"):
+        doc = json.loads(raw) if raw else {}
+        for rule in (doc.get("rules") or []) if isinstance(doc, dict) else []:
+            if isinstance(rule, dict) and rule.get("id"):
+                raw_rules.add(rule["id"])
+        for ent in (doc.get("entities") or []) if isinstance(doc, dict) else []:
+            if isinstance(ent, dict) and ent.get("id"):
+                raw_entities.add(ent["id"])
+    if norm_rules != raw_rules:
+        raise ServiceError(
+            "SQLite export is internally inconsistent: the normalized 'rules' "
+            "table does not match the rules embedded in module raw_json "
+            "(drift/tampering). Rebuild it with scripts/export_sqlite.py."
+        )
+    if norm_entities != raw_entities:
+        raise ServiceError(
+            "SQLite export is internally inconsistent: the normalized 'entities' "
+            "table does not match the entities embedded in module raw_json "
+            "(drift/tampering). Rebuild it with scripts/export_sqlite.py."
+        )
 
 
 def _load_from_sqlite(sqlite_path: Optional[Path]) -> Dataset:
@@ -141,6 +273,10 @@ def _load_from_sqlite(sqlite_path: Optional[Path]) -> Dataset:
     ds = Dataset(read_mode="sqlite", sqlite_path=path.resolve())
     conn = sqlite3.connect(str(path))
     try:
+        # Authenticate the export contract BEFORE exposing any operation, so an
+        # incomplete/foreign/inconsistent snapshot fails closed rather than
+        # returning a clean-looking (and dangerous) enforcement result.
+        _validate_export(conn)
         ds.clients = _rows_by_raw_json(conn, "clients", "client_id")
         ds.modules = _rows_by_raw_json(conn, "modules", "module_id")
         ds.projections = _rows_by_raw_json(conn, "projections", "projection_id")
@@ -161,7 +297,8 @@ def _rows_by_raw_json(conn: sqlite3.Connection, table: str, id_col: str) -> dict
 
     The export writes each resource's exact document as ``raw_json``; parsing it
     back yields the same dict the YAML backend produces, so the two backends are
-    equal by construction.
+    equal by construction. ``_validate_export`` has already proven row-id/raw-id
+    agreement, so keying by ``doc['id']`` here cannot mask a mismatch.
     """
     out: dict[str, dict[str, Any]] = {}
     for row_id, raw in conn.execute(f"SELECT {id_col}, raw_json FROM {table}"):
@@ -178,12 +315,21 @@ def _rows_by_raw_json(conn: sqlite3.Connection, table: str, id_col: str) -> dict
 # Shared helpers
 # --------------------------------------------------------------------------- #
 def _git_commit(root: Optional[Path]) -> Optional[str]:
-    """Best-effort repo commit for the provenance stamp; None if unavailable."""
-    cwd = str(root) if root else None
+    """Best-effort ontology-checkout commit for the provenance stamp.
+
+    Returns ``None`` unless a concrete ontology ``root`` is supplied. Critically it
+    NEVER falls back to the ambient process directory: a SQLite-backed dataset has
+    no ``root``, so an installed consumer running the CLI inside its OWN repository
+    must not have that consumer repo's commit mislabelled as ontology provenance
+    (Codex Reviewer A/B, Integration Auditor). SQLite exports carry no embedded
+    provenance today, so their ``repo_commit`` is ``None`` by construction.
+    """
+    if root is None:
+        return None
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=cwd,
+            cwd=str(root),
             capture_output=True,
             text=True,
         )
@@ -196,7 +342,13 @@ def _git_commit(root: Optional[Path]) -> Optional[str]:
 
 
 def _meta(ds: Dataset) -> dict[str, Any]:
-    """The provenance envelope every response carries (issue #19 ``_meta``)."""
+    """The provenance envelope every response carries (issue #19 ``_meta``).
+
+    ``repo_commit`` is derived ONLY from the ontology ``root`` (the ``yaml``
+    backend). For the ``sqlite`` backend ``root`` is ``None`` and no provenance is
+    embedded in the artifact, so ``repo_commit`` is ``None`` — it is never taken
+    from the ambient working directory's Git state.
+    """
     return {
         "read_mode": ds.read_mode,
         "sqlite_path": str(ds.sqlite_path) if ds.sqlite_path else None,
@@ -254,6 +406,44 @@ def _require_projection(ds: Dataset, projection_id: str, client_id: Optional[str
 
 def _client_modules(ds: Dataset, client_id: str) -> list[dict[str, Any]]:
     return [m for m in ds.modules.values() if m.get("client_id") == client_id]
+
+
+def _client_workstreams(ds: Dataset, client_id: str) -> set:
+    """The recognized workstreams for a client: those declared on the client
+    document (``workstreams[].id``) plus any carried by its modules. Used to
+    reject an unrecognized ``--workstream`` instead of silently selecting zero
+    rules."""
+    names: set = set()
+    client = ds.clients.get(client_id) or {}
+    for ws in client.get("workstreams") or []:
+        if isinstance(ws, dict) and isinstance(ws.get("id"), str):
+            names.add(ws["id"])
+        elif isinstance(ws, str):
+            names.add(ws)
+    for module in _client_modules(ds, client_id):
+        for ws in module.get("workstreams") or []:
+            if isinstance(ws, str):
+                names.add(ws)
+    return names
+
+
+def _require_workstream(ds: Dataset, client_id: str, workstream: Optional[str]) -> None:
+    """Fail closed on an unrecognized workstream.
+
+    A misspelled ``--workstream`` (e.g. in a pre-publish hook) previously matched
+    no module, selected zero rules, and let ``check_copy`` report success — a
+    silent bypass of a blocking guardrail (Codex Reviewer A). Validate the scope
+    name against the client's declared/used workstreams so a typo is a structured
+    exit-2 error, not a green check."""
+    if workstream is None:
+        return
+    known = _client_workstreams(ds, client_id)
+    if workstream not in known:
+        listed = ", ".join(sorted(known)) or "(none)"
+        raise ServiceError(
+            f"unknown workstream {workstream!r} for client {client_id!r} "
+            f"(known workstreams: {listed})"
+        )
 
 
 def resolve_scope(
@@ -382,8 +572,9 @@ def list_rules(
 ) -> dict[str, Any]:
     """The client's guardrail rules, optionally narrowed to a ``severity`` and/or
     a ``workstream`` (modules whose ``workstreams`` list carries it). Fails closed
-    on an unknown client."""
+    on an unknown client or an unknown workstream."""
     _require_client(ds, client_id)
+    _require_workstream(ds, client_id, workstream)
     selected: list[dict[str, Any]] = []
     for module in _client_modules(ds, client_id):
         module_workstreams = module.get("workstreams") or []
@@ -420,6 +611,9 @@ def _select_check_rules(
     ``includes.rules``) — but over the normalized dataset, so the SQLite path
     stays Ruby-free."""
     _require_client(ds, client_id)
+    # A misspelled workstream must fail closed, never select zero rules and let
+    # check_copy report a clean pass (Codex Reviewer A).
+    _require_workstream(ds, client_id, workstream)
     scoped_modules: Optional[set] = None
     rule_patterns: list = []
     if projection_id is not None:

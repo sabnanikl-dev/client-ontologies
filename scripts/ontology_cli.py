@@ -46,6 +46,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ontology_service as svc  # noqa: E402
 
 
+class _StructuredArgumentParser(argparse.ArgumentParser):
+    """An ``ArgumentParser`` whose usage errors raise ``ServiceError`` instead of
+    printing argparse's free-form usage text and calling ``sys.exit(2)`` directly.
+
+    ``main`` maps ``ServiceError`` to the documented ``{"error": "..."}`` JSON on
+    stderr with exit 2, so a malformed argument (unknown flag, missing required
+    option, missing subcommand) fails through the SAME deterministic, machine
+    -parseable contract as every other error — closing the gap where argparse
+    terminated the process before the structured handler could run (Codex Reviewer
+    A, Integration Auditor). ``--help`` still exits 0 via the inherited
+    ``exit()``/``print_help`` path, which this does not override. Subparsers built
+    with ``add_subparsers`` inherit this class, so subcommand errors are structured
+    too."""
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        raise svc.ServiceError(f"{self.prog}: {message}")
+
+
 def _add_backend_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--source",
@@ -65,7 +83,7 @@ def _add_backend_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _StructuredArgumentParser(
         prog="ontology",
         description=(
             "Read-only runtime surface over the client ontologies: list clients, "
@@ -181,8 +199,11 @@ def main(argv: Optional[list] = None, stdin=None) -> int:
     """CLI entry point (console script ``ontology``). Prints the JSON result to
     stdout and returns the exit code."""
     stdin = stdin if stdin is not None else sys.stdin
-    args = build_parser().parse_args(argv)
     try:
+        # parse_args runs INSIDE the handler so an argparse usage error (raised as
+        # a ServiceError by _StructuredArgumentParser) is reported through the same
+        # structured {"error": ...} exit-2 contract as every other failure.
+        args = build_parser().parse_args(argv)
         result, exit_code = _dispatch(args, stdin)
     except svc.ServiceError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
