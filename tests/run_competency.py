@@ -108,6 +108,18 @@ class QuestionError(Exception):
     """A malformed registry entry (usage error, not a data-answer failure)."""
 
 
+# The complete, closed set of question-level envelope keys. Anything else is a
+# structural error (fail closed) unless it is a deliberate ``x_``-prefixed local
+# extension — mirroring the schema layer's escape hatch. A misspelled safety key
+# (e.g. ``gaurds:`` for ``guards:``) must therefore be rejected as a usage error
+# rather than silently ignored, which would drop every intended guard while the
+# question still reported PASS (Codex Reviewer B).
+ALLOWED_QUESTION_KEYS = frozenset({
+    "id", "client_id", "projection", "question", "rationale",
+    "query", "expect", "required", "guards",
+})
+
+
 # --------------------------------------------------------------------------- #
 # Registry loading
 # --------------------------------------------------------------------------- #
@@ -277,7 +289,10 @@ def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
     """Shape-check an already-parsed registry document; return its questions.
 
     Raises QuestionError on any structural defect — a non-mapping registry,
-    missing/duplicate identity fields, an unknown/malformed query, an unknown or
+    missing/duplicate identity fields, a missing/non-string human-readable
+    ``question`` or ``rationale``, an unknown question-level key (except a
+    deliberate ``x_`` extension — so a misspelled ``gaurds:`` fails closed rather
+    than silently dropping guards), an unknown/malformed query, an unknown or
     misspelled guard operand, a select token that is not a real column, duplicate
     output keys, or an expect payload whose keys/types do not match the query. A
     broken registry therefore fails as a usage error BEFORE evaluation instead of
@@ -305,9 +320,31 @@ def validate_questions(doc: Any, source: str) -> list[dict[str, Any]]:
                 raise QuestionError(
                     f"{source}: each question needs a non-empty string {field!r}; got {val!r}"
                 )
-        if q.get("query") is None:
-            raise QuestionError(f"{source}: question {q['id']!r} missing required field 'query'")
         qid = q["id"]
+        # Fail-closed envelope: reject any unknown question-level key (except a
+        # deliberate ``x_``-prefixed extension). Without this, a misspelled
+        # ``gaurds:`` was accepted and the runner ignored every intended safety
+        # assertion while still reporting PASS (Codex Reviewer B). Do this BEFORE
+        # trusting the rest of the envelope so a typo cannot smuggle in a no-op.
+        unknown = sorted(
+            k for k in q
+            if k not in ALLOWED_QUESTION_KEYS and not str(k).startswith("x_")
+        )
+        if unknown:
+            _q_err(source, qid,
+                   f"unknown question-level key(s) {unknown}; "
+                   f"use an 'x_'-prefixed key for a deliberate local extension")
+        # Issue #31 requires every question to carry a human-readable ``question``
+        # and a ``rationale`` (the consumer job it protects). A missing or
+        # non-string value previously slipped through; enforce both as non-empty
+        # strings before evaluation (Codex Reviewer A / B).
+        for field in ("question", "rationale"):
+            val = q.get(field)
+            if not isinstance(val, str) or not val.strip():
+                _q_err(source, qid,
+                       f"needs a non-empty string {field!r}; got {val!r}")
+        if q.get("query") is None:
+            _q_err(source, qid, "missing required field 'query'")
         if qid in seen:
             raise QuestionError(f"{source}: duplicate question id: {qid}")
         seen.add(qid)
@@ -1059,22 +1096,33 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
     Each tuple is ``(name, doc, expected_substring)``. A malformed doc names the
     substring its QuestionError must contain; the lone valid control uses
     ``None`` (must NOT raise). These lock the exact false-passes the reviewers
-    reproduced: a non-mapping query, an unknown select column, a misspelled guard
-    operand, an unknown filter column, duplicate output keys, a wrong-typed
-    expect payload, a missing guard operand, an expected-row key typo, a
-    projection_resources question missing its resources, a status/field/id guard
-    not bound to a selected output key (silent no-op), a non-scalar filter
-    operand, and a row-field guard on a projection_resources answer.
+    reproduced: a non-string id/client_id/projection, a missing or non-string
+    human-readable question/rationale, a misspelled (`gaurds`) or otherwise
+    unknown question-level key, a non-boolean required, a non-mapping query, an
+    unknown select column, a misspelled guard operand, an unknown filter column,
+    duplicate output keys, a wrong-typed expect payload, a missing guard operand,
+    an expected-row key typo, a projection_resources question missing its
+    resources, a status/field/id guard not bound to a selected output key
+    (silent no-op), a non-scalar filter operand, and a row-field guard on a
+    projection_resources answer.
     """
+    _DROP = object()  # sentinel: a probe passes _DROP to remove a base field
+
     def q(**over: Any) -> dict[str, Any]:
         base: dict[str, Any] = {
             "id": "probe.q",
             "client_id": "c",
             "projection": "p",
+            "question": "Does the probe stay well-formed?",
+            "rationale": "Locks the control case as valid.",
             "query": {"op": "entities", "filters": {"entity_type": "metric"}, "select": ["entity_id", "status"]},
             "expect": {"rows": [{"entity_id": "c.x", "status": "draft"}]},
         }
         base.update(over)
+        # Allow a probe to DELETE a base field (e.g. drop `question`) by passing
+        # the ``_DROP`` sentinel as its value.
+        for key in [k for k, v in base.items() if v is _DROP]:
+            del base[key]
         return base
 
     def doc(question: dict[str, Any]) -> dict[str, Any]:
@@ -1092,6 +1140,21 @@ def _negative_probe_docs() -> list[tuple[str, dict[str, Any], Optional[str]]]:
         ("client-id-not-a-string", doc(q(client_id=["c"])), "non-empty string 'client_id'"),
         # A non-string `projection` must fail before scope resolution.
         ("projection-not-a-string", doc(q(projection=3)), "non-empty string 'projection'"),
+        # Reviewer A / B: issue #31 requires a human-readable `question` and
+        # `rationale`. A missing or non-string value must fail closed as a usage
+        # error, not slip through unvalidated.
+        ("question-missing", doc(q(question=_DROP)), "non-empty string 'question'"),
+        ("question-not-a-string", doc(q(question={"oops": 1})), "non-empty string 'question'"),
+        ("rationale-missing", doc(q(rationale=_DROP)), "non-empty string 'rationale'"),
+        ("rationale-not-a-string", doc(q(rationale=7)), "non-empty string 'rationale'"),
+        # Reviewer B exact repro: a misspelled safety key `gaurds:` must be
+        # rejected as an unknown question-level key rather than silently ignored
+        # (which would drop every intended guard while the question reports PASS).
+        ("misspelled-gaurds-key",
+         doc(q(gaurds=[{"type": "forbid_id_prefix", "prefixes": ["other"]}])),
+         "unknown question-level key"),
+        # Any arbitrary unknown envelope key must also fail closed.
+        ("arbitrary-unknown-question-key", doc(q(nope="x")), "unknown question-level key"),
         # Codex Reviewer A exact repro: a non-boolean `required` (e.g. `0`) could
         # make a FAILING required question exit 0; reject it up front.
         ("required-not-a-boolean", doc(q(required=0)), "'required' must be a boolean"),
