@@ -49,6 +49,14 @@ from pathlib import Path
 BLOCKING_RULE = "jmd-menswear.website.showroom-not-ecommerce"
 COPY = "Add to cart today"
 
+# The exact deterministic placeholder payload emitted by the `ontology-mcp`
+# console entry point (`scripts/ontology_cli.py::mcp_entrypoint`). The MCP stdio
+# adapter is a later PR; until then the entry point must fail closed with THIS
+# stable notice — not merely *some* object carrying an "error" key. Pinning the
+# value here (and asserting stderr is byte-identical across repeated invocations)
+# is what makes a nondeterministic/partial MCP surface a hard CI failure.
+MCP_EXPECTED_ERROR = "ontology-mcp is not yet implemented"
+
 
 class SmokeError(AssertionError):
     pass
@@ -118,29 +126,52 @@ def _check_sqlite_enforcement(ontology: Path, sqlite_path: Path, env: dict[str, 
     )
 
 
-def _check_mcp_fails_closed(ontology_mcp: Path, env: dict[str, str]) -> None:
+def _run_mcp(ontology_mcp: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as foreign_cwd:
-        proc = subprocess.run(
+        return subprocess.run(
             [str(ontology_mcp)],
             cwd=foreign_cwd, capture_output=True, text=True, env=env,
         )
-    if proc.returncode != 2:
+
+
+def _check_mcp_fails_closed(ontology_mcp: Path, env: dict[str, str]) -> None:
+    # Invoke twice: a compliant placeholder is deterministic, so its stderr must be
+    # byte-identical run to run. A nondeterministic/partial MCP surface (e.g. a
+    # payload carrying a fresh random value each call) then fails here instead of
+    # false-passing on a bare "error"-key presence check.
+    first = _run_mcp(ontology_mcp, env)
+    second = _run_mcp(ontology_mcp, env)
+    for proc in (first, second):
+        if proc.returncode != 2:
+            raise SmokeError(
+                f"ontology-mcp placeholder must fail closed with exit 2, got {proc.returncode} "
+                f"(stdout={proc.stdout!r}, stderr={proc.stderr!r})"
+            )
+        if proc.stdout.strip():
+            raise SmokeError(
+                f"ontology-mcp must not expose a partial success surface on stdout, "
+                f"got {proc.stdout!r}"
+            )
+    if first.stderr != second.stderr:
         raise SmokeError(
-            f"ontology-mcp placeholder must fail closed with exit 2, got {proc.returncode} "
-            f"(stdout={proc.stdout!r}, stderr={proc.stderr!r})"
-        )
-    if proc.stdout.strip():
-        raise SmokeError(
-            f"ontology-mcp must not expose a partial success surface on stdout, "
-            f"got {proc.stdout!r}"
+            "ontology-mcp placeholder stderr must be deterministic (byte-identical across "
+            f"invocations); got {first.stderr!r} then {second.stderr!r}"
         )
     try:
-        parsed = json.loads(proc.stderr)
+        parsed = json.loads(first.stderr)
     except json.JSONDecodeError as exc:
-        raise SmokeError(f"ontology-mcp stderr was not structured JSON: {exc} (stderr={proc.stderr!r})")
-    if "error" not in parsed:
+        raise SmokeError(f"ontology-mcp stderr was not structured JSON: {exc} (stderr={first.stderr!r})")
+    if not isinstance(parsed, dict) or "error" not in parsed:
         raise SmokeError(f'ontology-mcp must emit a structured {{"error": ...}}, got {parsed!r}')
-    _log_pass('ontology-mcp fails closed: structured {"error": ...} on stderr, exit 2')
+    if parsed.get("error") != MCP_EXPECTED_ERROR:
+        raise SmokeError(
+            f'ontology-mcp must emit the exact placeholder error {MCP_EXPECTED_ERROR!r}, '
+            f"got {parsed.get('error')!r} (full payload={parsed!r})"
+        )
+    _log_pass(
+        'ontology-mcp fails closed: exact structured {"error": '
+        f'"{MCP_EXPECTED_ERROR}"}} on stderr, exit 2, byte-identical across invocations'
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
