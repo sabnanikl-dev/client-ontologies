@@ -35,6 +35,11 @@ only because later issues build on them:
 - **#21** — shared manifest-aware loader (`scripts/ontology_loader.py`) used by both the
   validator and exporter.
 - **#11** — deterministic `machine_check` copy/safety rule execution (`scripts/check_rules.py`).
+- **#31** — the shared competency-question corpus and deterministic outcome runner
+  (`tests/competency/questions.yaml` + `tests/run_competency.py`), reused by #19.
+- **#19** — the read-only runtime consumer surface: shared transport-agnostic service
+  (`scripts/ontology_service.py`) + stdlib CLI (`scripts/ontology_cli.py`), YAML and
+  SQLite backends, `ontology` / `ontology-mcp` console entry points (`pyproject.toml`).
 - **#25** — the `metric` entity type modeled against real Femme local-visibility outcomes
   (`draft`/`baseline: unknown` where no snapshot exists).
 - **#26** — corrected agent-facing `CLAUDE.md` guidance.
@@ -45,8 +50,8 @@ Delivered prerequisites are marked `(done)`; they still anchor the graph because
 work depends on them.
 
 ```text
-#21 shared loader (done) -> #11 machine checks (done) -> #19 runtime surface
-#21 shared loader (done) -> #31 competency corpus ......... reused by #19 runtime surface
+#21 shared loader (done) -> #11 machine checks (done) -> #19 runtime surface (done)
+#21 shared loader (done) -> #31 competency corpus (done) .. reused by #19 runtime surface (done)
 
 #9 approval gates -> #8 provenance
 #9 approval gates -> #4 actions -> #10 state-machine guards
@@ -66,10 +71,10 @@ below avoids rework and reduces risk for later agents.
 
 **Soft sequencing, not hard dependencies:**
 
-- **#31** (competency-question corpus) is unblocked now that #21 and #11 are delivered.
-  It should land *before #19 closes* so the runtime surface can prove normalized
-  YAML/SQLite answer parity against a shared corpus, and #19 reuses the corpus. This is a
-  recommended sequencing/reuse gate, not a code-level hard dependency.
+- **#31** (competency-question corpus) landed *before #19 closed*, as recommended, so the
+  runtime surface proves normalized YAML/SQLite answer parity against the shared corpus and
+  #19 reuses it (both now delivered). This was a recommended sequencing/reuse gate, not a
+  code-level hard dependency.
 - **#24** (new-client scaffolding) and **#5** (interfaces/shared properties) are linked
   only by soft, recommended sequencing. #24 is independent and recommended before
   onboarding the next client, while #5 is trigger-gated: it starts when a third client
@@ -84,9 +89,9 @@ current Phase 0 work and is described under Phases below.
 
 | Order | Issue | Work | Why here / gate |
 |---:|---:|---|---|
-| 1 | **#31** | Add competency-question traceability and deterministic semantic outcome tests | Unblocked by delivered #21/#11; establishes a shared outcome-usefulness corpus and should land before #19 closes so the runtime proves YAML/SQLite answer parity. Test metadata only — not a new canonical kind. |
-| 2 | **#19** | Deliver the read-only runtime core and CLI | First major consumer value: clients, context, projections, rules, and copy checks through one shared service layer. Reuses #31's corpus to prove consumer operations. |
-| 3 | **#9** | Make approval gates and records first-class | Governance foundation; blocks #4 and the approval-guard portion of #10. |
+| ✅ | **#31** *(delivered)* | Competency-question traceability and deterministic semantic outcome tests | Delivered. Shared outcome-usefulness corpus (test metadata, not a canonical kind); reused by #19 to prove YAML/SQLite answer parity. |
+| ✅ | **#19** *(delivered)* | Read-only runtime core and CLI | Delivered. Clients, context, projections, rules, and copy checks through one shared transport-agnostic service; YAML and SQLite backends; `ontology`/`ontology-mcp` entry points. Reuses #31's corpus to prove consumer operations. |
+| 1 | **#9** | Make approval gates and records first-class | Governance foundation; blocks #4 and the approval-guard portion of #10. |
 | 4 | **#8** | Add projection provenance and runtime build metadata | Follows #9 in the governance layer and lets consumers identify the ontology state behind projections and exports. |
 | 5 | **#23** | Add portable evidence anchors and evidence-health reporting | Completes the provenance/evidence integrity layer without conflating citation health with resource lifecycle. |
 | 6 | **#22** | Constrain relationship predicates, cardinality, and inverse names | Stabilize relationship semantics before broader model expansion (the delivered #25 metric work already exercises predicates such as `measures`). |
@@ -108,10 +113,11 @@ The table is the default queue, not a reason to ignore changed business context:
   the queue. Keep both PRs isolated from the canonical runtime dependency path.
 - If a third client is imminent, move **#24** forward. Start **#5** only after onboarding
   exposes actual shared-property or interface pressure.
-- Independent quality work **#22**, **#23**, and **#24** may fill a deliberate gap, but
-  should not delay the #19 runtime path without a concrete reason.
+- Independent quality work **#24** may fill a deliberate gap, but should not delay the
+  active governance path without a concrete reason. (The #19 runtime path is delivered.)
 - Do not start **#4** or approval-guarded **#10** work before #9.
-- Do not close **#19** before **#31**'s corpus can exercise its consumer operations.
+- #19 closed only after **#31**'s corpus could exercise its consumer operations — the
+  runtime surface reuses that corpus to prove YAML/SQLite answer parity (both delivered).
 - Do not pull **#7** forward while full-projection loading remains sufficient at current
   scale.
 
@@ -136,16 +142,16 @@ Exit gate:
 
 ### Phase 1 — Shared foundations, outcome corpus, and runtime v1
 
-Issues: **#21 (done) -> #11 (done) -> #31 -> #19**
+Issues: **#21 (done) -> #11 (done) -> #31 (done) -> #19 (done)**
 
 Exit gate:
 
 - Validator, exporter, and new consumers share one manifest-aware loader. *(#21, delivered.)*
 - Machine checks have deterministic positive and negative coverage. *(#11, delivered.)*
 - A competency-question corpus deterministically proves consumers still get correct,
-  status-aware answers, with a controlled negative case for semantic drift. *(#31.)*
+  status-aware answers, with a controlled negative case for semantic drift. *(#31, delivered.)*
 - A read-only CLI exposes the agreed v1 operations without granting mutation authority,
-  reusing the competency corpus to prove YAML/SQLite answer parity. *(#19.)*
+  reusing the competency corpus to prove YAML/SQLite answer parity. *(#19, delivered.)*
 
 ### Phase 2 — Governance and semantic integrity
 
@@ -222,16 +228,20 @@ One shared, stdlib-first core with thin adapters keeps transport choices additiv
 ```text
 scripts/ontology_loader.py   -- load + resolve projections (stdlib, #21, delivered)
 scripts/check_rules.py       -- machine_check engine (stdlib, #11, delivered)
-scripts/ontology_service.py  -- transport-agnostic operations, plain JSON dicts (#19)
+scripts/ontology_service.py  -- transport-agnostic operations, plain JSON dicts (#19, delivered)
         |
-        +-- scripts/ontology_cli.py       <- v1: CI / hooks / local consumers
+        +-- scripts/ontology_cli.py       <- v1: CI / hooks / local consumers (#19, delivered)
         +-- server/ontology_mcp.py        <- next: thin isolated MCP adapter
         +-- server/ontology_api.py        <- later: separately scoped HTTP adapter
 ```
 
-Runtime v1 is read-only. The CLI, MCP adapter, and shared core live in this repository,
-co-located with the schema and data they interpret. Consumers install or register that
-implementation rather than reimplementing parser and guardrail logic downstream.
+Runtime v1 is read-only and **delivered** (#19): the shared core + CLI, YAML and SQLite
+backends, and the `ontology` / `ontology-mcp` console entry points (`pyproject.toml`). The
+CLI, the future MCP adapter, and the shared core live in this repository, co-located with
+the schema and data they interpret. Consumers install or register that implementation
+rather than reimplementing parser and guardrail logic downstream. The `ontology-mcp` entry
+point is registered for packaging completeness; the MCP stdio adapter itself
+(`server/ontology_mcp.py`) is the next PR.
 
 For an agentic-harness consumer such as Femme Visibility:
 
@@ -243,12 +253,12 @@ For an agentic-harness consumer such as Femme Visibility:
 
 ## Remaining untracked design gap
 
-The currently open issues cover deterministic outcome/competency testing (#31),
-relationship semantics (#22), evidence portability (#23), new-client scaffolding (#24),
-the runtime surface (#19), governance and provenance (#9, #8), actions and state machines
-(#4, #10), handoff and lifecycle hygiene (#12, #6), interfaces (#5), the LangExtract
-experiment (#27–#28), and speculative retrieval (#7). Metric modeling (#25) and
-agent-doc drift (#26) are delivered; this roadmap normalization is #32.
+The currently open issues cover new-client scaffolding (#24), governance and provenance
+(#9, #8), actions and state machines (#4, #10), handoff and lifecycle hygiene (#12, #6),
+interfaces (#5), the LangExtract experiment (#27–#28), and speculative retrieval (#7).
+Deterministic outcome/competency testing (#31), the runtime surface (#19), relationship
+semantics (#22), evidence portability (#23), metric modeling (#25), and agent-doc drift
+(#26) are delivered; this roadmap normalization is #32.
 
 One material gap remains only partially covered: typed properties with per-property
 evidence and confidence. Issue #5 provides a possible extension point, but a separate

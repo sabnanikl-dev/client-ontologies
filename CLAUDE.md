@@ -27,6 +27,7 @@ python3 tests/run_export.py      # the valid fixture must validate + export clea
 python3 tests/run_competency.py  # each client still answers its competency questions (outcome regression)
 python3 tests/run_checks.py      # the machine_check guardrail engine matches + exits correctly
 python3 tests/run_evidence.py    # the evidence-health checker hashes + exits correctly
+python3 tests/run_cli.py         # the read-only runtime CLI/service: acceptance, YAML/SQLite parity, isolation
 ```
 
 `tests/run_competency.py` is the outcome-oriented suite: it reads the test-owned
@@ -60,6 +61,33 @@ only): it runs a client's `machine_check` rules against copy
 and exits non-zero only for enforceable (`active`/`approved`/`prohibited`) rules
 meeting `--fail-on` (default `blocking`). It is not part of the core commit gate
 above, but `tests/run_checks.py` guards it and runs in CI.
+
+`scripts/ontology_service.py` + `scripts/ontology_cli.py` are the **read-only
+runtime consumer surface** (issue #19). The service is transport-agnostic: five
+pure-read operations returning plain JSON dicts — `list_clients`,
+`get_client_context` (projection-scoped entities + active rules),
+`list_rules`, `check_copy` (reuses #11's `evaluate_rule`/`compute_exit`, so its
+exit code is inherited verbatim), and `get_projection` (resolved slice +
+provenance). Every response carries a `_meta` stamp (`read_mode`, `repo_commit`,
+`generated_at`). Two interchangeable backends sit behind one normalized model:
+`--source yaml` (canonical YAML via the shared loader — uses Ruby) and
+`--source sqlite --sqlite-path build/…​.sqlite` (a prebuilt export — **pure
+stdlib `sqlite3`, never invokes Ruby**); both reconstruct the same per-resource
+documents, so answers are equal by construction. It is **read-only** — no
+create/modify/delete, no account/CMS/GBP mutation; modeling an operation grants
+no authority to run it. It **fails closed** (structured non-zero error) on an
+unknown client/projection, an unavailable/foreign SQLite file, backend drift, or
+malformed args, and never returns a resource outside the selected projection.
+`draft`/`inferred` resources are flagged `planning_only` and never presented as
+recorded outcomes. The CLI (`ontology <cmd>`, console entry point in
+`pyproject.toml`) is the enforcement surface: `ontology check-copy --client
+<slug> --file draft.md` drops into a consumer's CI or pre-publish git hook and
+exits non-zero on a blocking violation. `pyproject.toml` also registers an
+`ontology-mcp` entry point; the MCP stdio adapter itself (`server/`) is the next
+PR, so that entry point currently fails closed with a structured notice.
+`tests/run_cli.py` guards all of this (and reuses #31's `evaluate_suite`/
+`load_questions` corpus to prove YAML/SQLite answer parity without re-encoding any
+expected value) and runs in CI.
 
 `scripts/check_evidence.py` is the runtime evidence-health engine (library + CLI,
 stdlib only). It reports at two separate levels: **sources** (one row per
