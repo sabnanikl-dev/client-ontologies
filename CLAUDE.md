@@ -33,27 +33,101 @@ python3 tests/run_cli.py         # the read-only runtime CLI/service: acceptance
 `tests/run_competency.py` is the outcome-oriented suite: it reads the test-owned
 registry `tests/competency/questions.yaml` (NOT a canonical `kind`; never loaded
 as client truth) and proves each client ontology still answers its
-business/governance competency questions. Loading is **projection/client-directed**
-(issue #31 AC): for each question it builds a throwaway SCOPED export through the
-shared loader/export path (never the repo's `build/`) from only the named
-client's manifest, `client.yaml`, the named projection, and the modules that
-projection references — never another client's files and never a module the
-projection excludes (`resolve_scope_paths` computes the file set — widening to
-the full single-client module set rather than scanning-and-excluding when a
-reference points outside `includes.modules`; `export_sqlite.export(..., paths=...)`
-reuses the same `parse_yaml`/table shapes and rejects any path outside `root`).
-Results are then further scoped through the named projection. Four regressions
-back it: **loading-isolation** and **resolver-read isolation** (both instrument
-the ACTUAL `parse_yaml` calls — not just returned path lists — to prove no scoped
-load reaches another client or opens a module the projection excludes),
-**drift-isolation** (a single controlled mutation fails only the relevant
-question), and **registry shape-validation** (a malformed question — including a
-non-string `id`/`client_id`/`projection`, a non-boolean `required`, a guard not
-bound to a selected output column, or a non-scalar filter operand — is rejected
-as a usage error / exit 2 before any answer is trusted). Expected answers live only in the registry, so a consumer
-(issue #19) can reuse the corpus via `evaluate_suite(db_path, questions)` to
-prove YAML/SQLite parity without re-encoding them. It needs no model, network,
-API credential, or live client system.
+business, technical/data-flow, and bounded multi-hop competency questions — the
+proof behind the client coverage contract in `docs/coverage.md`. Its
+projection-scoped query vocabulary is `entities`/`rules`/`projection_resources`
+plus (issue #41) `relationships` (subject/predicate/object rows, in scope only
+when the edge's module is in scope AND both endpoints are in-scope entities) and
+`path` (a **deliberately bounded, deterministic** simple-path traversal with
+explicit `start`/`end` constraints, allowed `predicates`, and `min_hops`/
+`max_hops` ≤ `PATH_HOP_CAP` — NOT a general graph query; no GraphRAG, embeddings,
+model grading, cross-client loading, or second store). Guards keep answers safe:
+status / `require_field_in` / `forbid_field_in` guards prove a draft plan is not
+presented as verified current architecture, and `forbid_id_prefix` /
+`require_edge_confidence_in` / `forbid_edge_confidence_in` guards (each bound to
+the query's output shape) prove no other client's or excluded module's resource
+leaks in. Loading is **projection/client-directed** (issue #31 AC): for each
+question it builds a throwaway SCOPED export through the shared loader/export path
+(never the repo's `build/`) from only the named client's manifest, `client.yaml`,
+the named projection, and the modules that projection references — never another
+client's files and never a module the projection excludes (`resolve_scope_paths`
+computes the file set — widening to the full single-client module set rather than
+scanning-and-excluding when a reference points outside `includes.modules`;
+`export_sqlite.export(..., paths=...)` reuses the same `parse_yaml`/table shapes
+and rejects any path outside `root`). Results are then further scoped through the
+named projection (relationship endpoints and every traversed path node stay in
+scope). Every controlled operand a question names — a relationship/path
+`predicate`, an entity `entity_type`, a `source_confidence`, a `status`, a rule
+`severity` — is validated against the SAME vocabulary the schema enforces (loaded
+from `schemas/*.schema.json`, with the schema's bounded `x_` predicate escape);
+every filter/expected/field-guard operand is also container- and type-checked per
+column: a field guard's operand container matches its operator's cardinality
+(`require_field_equals` takes exactly one scalar — a list/mapping/null is rejected;
+`require_field_in`/`forbid_field_in` take a **non-empty list of scalars**, not
+hard-coded strings, so a boolean membership operand is expressible), and then every
+scalar is type-checked against the selected column (a bool/number against a string
+column like `subject` is rejected, and a
+`require_field_equals`/`require_field_in`/`forbid_field_in` operand on the boolean
+`public_facing` column must be a real `true`/`false` — a `0`/`1` or a string is
+rejected up front rather than passing loosely through Python's `False == 0`), not
+silently unmatched; the
+`expect` envelope is closed; and each expected path chain is checked against its
+query's hop bounds / allowed predicates / endpoint constraints, rejects a
+repeated-node (cyclic) chain the simple-path traversal could never return, and —
+once the scoped export exists — rejects an expected endpoint whose actual
+`entity_type` contradicts the query's `start`/`end` constraint. So a misspelled
+predicate or an impossible chain is a usage error, not a silently-empty answer a
+required question reports as PASS. A `required` question is **gating**: it must
+pass and assert a **non-empty** positive answer (an empty required expectation
+with vacuous guards can never gate on anything). Being required does NOT by itself
+make a family `covered` — `covered` (in `docs/coverage.md`) is the subset of
+required questions whose retrieved resources are evidence-backed; a required
+question may instead assert a status-awareness safety property over draft resources
+(gating, but not coverage). A deliberately empty answer must be `required: false`
+(a future explicit absence-query DSL stays out of scope). A failed **optional**
+question never gates the exit code but is reported honestly (the summary says
+"N required passed; K optional FAILED", never a blanket "all passed"), and drift
+isolation is measured against the clean baseline so an already-failing optional
+question never turns a drift case red. Parallel edges collapse to one path (the
+public representation carries no edge identity). Seven regressions back it:
+**loading-isolation** and
+**resolver-read isolation** (both instrument the ACTUAL `parse_yaml` calls — not
+just returned path lists — to prove no scoped load reaches another client or opens
+a module the projection excludes), **relationship/path scope-isolation** (a
+synthetic full export proves, at the result boundary, that a relationship endpoint
+in an excluded module is dropped and a bounded path never traverses an out-of-scope
+node, a disallowed predicate, or beyond its hop bound), **path-shape** (a synthetic
+fixture proves parallel edges dedupe to one path, a back-edge cannot revisit a node
+on a simple path, branching yields distinct paths, ordering is deterministic, and
+an expected endpoint's `entity_type` must match the query's constraint), **drift-
+isolation** (a single controlled mutation — a status, a projection membership, a
+relationship confidence, or a path-edge confidence — **newly** fails only the
+relevant question, measured against the clean baseline so a failing optional stays
+non-gating), **reporting-seam** (a synthetic fixture proves a `public_facing`
+boolean stored as SQLite `0/1` normalizes back to a real `bool` and comparison is
+JSON/type-sensitive so `false` ≠ `0`, both for row comparison and for
+field-guard evaluation — a boolean row never loosely satisfies an int/str guard
+operand; a `require_field_in`/`forbid_field_in` diagnostic renders even a
+heterogeneous accepted scalar operand (e.g. `[false, "x"]` on an untyped
+`fields.*` selection) deterministically and type-sensitively without a native
+cross-type `sorted()`, so an accepted guard returns a stable failure instead of
+raising — and that `--no-drift` represents the drift
+regression **explicitly as skipped** rather than silently "passed"), and
+**registry shape-validation** (a malformed question — including a
+non-string `id`/`client_id`/`projection`, a non-boolean `required`, a required
+question with an empty expected answer, a guard not bound to a selected output
+column, a non-scalar or wrong-typed filter operand, a field-guard operand whose
+type does not match its column (an int/str on the boolean `public_facing`), a typo'd
+`predicate`/`entity_type`/`source_confidence`/`status`/`severity` token, a
+stray/unknown `expect` key, an expected chain that contradicts its query (a
+disallowed predicate, a bad hop count, a mismatched endpoint, or a repeated node),
+or a malformed `path` contract — is rejected as a usage error / exit 2 before any
+answer is trusted).
+Expected answers live only in the registry, so a consumer (issue #19) can reuse
+the corpus via `evaluate_suite(db_path, questions)` to prove YAML/SQLite parity
+without re-encoding them; the relationship/`path` ops are test-owned and their
+runtime consumer surface is deferred to the separate query-surface issue. It
+needs no model, network, API credential, or live client system.
 
 `scripts/check_rules.py` is the runtime guardrail engine (library + CLI, stdlib
 only): it runs a client's `machine_check` rules against copy
